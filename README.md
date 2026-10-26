@@ -37,21 +37,16 @@ GOPROXY=proxy.golang.org go list -m github.com/eshu-hq/eshu-sdk/factschema@v0.1.
   (`claimid.go`), and a host-wired metrics seam (`metrics.go`).
   `testdata/8867-parity-tempo.json` is the cutover comparison input,
   byte-identical to the in-tree parity pack.
-- `grant/` — fail-closed stub enforcing the core-issued producer grant
-  draft (`producer-grant.manifest.DRAFT.yaml` in eshu-hq/eshu,
-  `go/cmd/collector-tempo`) at every emission. Until core issues a
-  grant, the zero Grant is denied and `Collect` fails closed before any
-  provider contact.
 - `contract.go`, `request.go`, `config.go`, `handler.go`, `failure.go` —
   the SDK adapter: the emitted contract, the stdio request wire shape,
-  activation parsing (targets plus the host-delivered grant), and the
-  claim-to-Result handler that maps every outcome to a validator-clean
-  result.
+  activation parsing (targets plus the shared host-level limits stanza),
+  and the claim-to-Result handler that maps every outcome to a
+  validator-clean result.
 - `cmd/collector/` — the standalone entrypoint: one claim from stdin by
   default (`--sdk-stdio`), and `seed` to install the binary and manifest
   into a component home from an init container.
 - `manifest.yaml` (`manifest_embed.go`) — the component package at version
-  `0.1.0`, with digest-pinned placeholder artifacts and the three emitted
+  `0.1.1`, with digest-pinned placeholder artifacts and the three emitted
   kinds at `1.0.0` reported.
 - `Dockerfile` — the static release image the tag-gated workflow publishes.
 - `config.example.yaml` — a starting activation config (placeholders, no
@@ -135,14 +130,12 @@ core-owned).
   (compare `ObservabilitySchemaVersion` / `ValidateSchemaVersion` in
   eshu-hq/eshu `go/internal/facts`). The locked `1.0.0` map lives in
   `tempo/schema.go` until the SDK gains one.
-- Grant `MaxLifetime` (720h) follows the draft's issuance example;
-  expiry/rotation ownership is recorded at cutover, not here.
 
 ## Relation to eshu-collector-grafana (#8857) and eshu-collector-loki (#8860)
 
 This repository mirrors that layout file for file (`doc.go`, `types.go`,
 `envelope.go`, `source.go`, `client.go`, `redaction.go`, `metrics.go`,
-`schema.go`, `claimid.go`, `grant/`, CI). Deliberate Tempo deltas:
+`schema.go`, `claimid.go`, CI). Deliberate Tempo deltas:
 
 - `normalize.go`: tag-set/tag-value normalization split out of
   `client.go` so both files stay under the 500-line cap (same split as
@@ -171,12 +164,16 @@ Postgres, graph, queue, lease, or workflow handle.
 go run ./cmd/collector < request.json > result.json
 ```
 
-A denied or missing producer grant fails closed as terminal
-`invalid_config` before any provider contact; an unconfigured scope fails
-retryable with no facts. A claim arriving with no lease time left fails
-retryable as `claim_deadline_exceeded`. The token stays optional: an empty
-`token_env` means unauthenticated Tempo, while a named-but-unset variable
-fails closed at config parse.
+A bad activation fails closed as terminal `invalid_config` before any
+provider contact; an unconfigured scope fails retryable with no facts. An
+oversized result fails terminal as `result_too_large` when the encoded result
+exceeds `config.limits.maxResultBytes`. A claim arriving with no lease time
+left fails retryable as `claim_deadline_exceeded`. The token stays optional:
+an empty `token_env` means unauthenticated Tempo, while a named-but-unset
+variable fails closed at config parse. The host passes the activation config
+block verbatim, including the shared `limits` stanza and the per-target
+`provider` key; `provider` must be empty or `tempo`, and the satellite
+enforces `limits.maxResultBytes` against its encoded result.
 
 The collector writes one JSON diagnostic line per claim to stderr for local
 runs and tests; the host's process runner drops the text. The line carries
@@ -222,29 +219,14 @@ copy the placeholders in `config.example.yaml`. Run only one of the two
 collectors per feed: with the same scope and instance id they would write the
 same stable keys.
 
-## Producer grants
+## Authorization
 
 The emitted kinds are core-owned, so the host refuses them without a live
-producer grant. Until the host defines grant delivery, the activation carries
-the core-issued grant verbatim under `config.grant` (see
-`config.example.yaml`); the collector re-checks the shape at the emission
-edge and fails closed without it. The grant holds no secret. A grant's scope
-is the collector kind (`tempo`), not a feed. Core issues the grant at cutover
-(one per kind):
-
-```sh
-eshu component grant dev.eshu.collector.tempo --component-home "$HOME_DIR" \
-  --version 0.1.0 --kind observability.source_instance --schema-version 1.0.0 \
-  --scope tempo --expires-in 720h
-eshu component grant dev.eshu.collector.tempo --component-home "$HOME_DIR" \
-  --version 0.1.0 --kind observability.observed_trace_signal --schema-version 1.0.0 \
-  --scope tempo --expires-in 720h
-eshu component grant dev.eshu.collector.tempo --component-home "$HOME_DIR" \
-  --version 0.1.0 --kind observability.coverage_warning --schema-version 1.0.0 \
-  --scope tempo --expires-in 720h
-```
-
-This repository never mints one.
+producer grant. Authorization stays host-enforced at emission: the activation
+carries `grants` at the activation level (issued again on every pod start by
+the reconcile init containers), and the satellite carries no grant material.
+`config.grant` is rejected as an unknown field, and the collect path performs
+no grant check.
 
 ## Releasing
 

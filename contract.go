@@ -6,7 +6,6 @@ package collector
 import (
 	sdk "github.com/eshu-hq/eshu-sdk/collector"
 
-	"github.com/eshu-hq/eshu-collector-tempo/grant"
 	"github.com/eshu-hq/eshu-collector-tempo/tempo"
 )
 
@@ -33,10 +32,10 @@ const (
 	FactKindObservedTraceSignal = tempo.KindObservedTraceSignal
 	// FactKindCoverageWarning identifies one source-local coverage warning.
 	FactKindCoverageWarning = tempo.KindCoverageWarning
-	// ProducerID is the first-party producer identity the host-delivered
-	// grant must name. Production grants are issued by core, never minted
-	// here.
-	ProducerID = grant.ProducerID
+	// ProducerID is the first-party producer identity. Production grants are
+	// issued by core and enforced by the host; the satellite carries no
+	// grant material.
+	ProducerID = "dev.eshu.collector.tempo"
 )
 
 // FactKinds returns every fact kind this collector may emit, in the order the

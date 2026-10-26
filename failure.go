@@ -14,11 +14,13 @@ import (
 
 const (
 	// FailureInvalidConfig marks an activation config the collector cannot
-	// run: a malformed request or target, an unresolvable credential, or a
-	// missing or denied producer grant. Retrying cannot help.
+	// run: a malformed request or target, or an unresolvable credential.
+	// Retrying cannot help.
 	FailureInvalidConfig = "invalid_config"
 	// FailureInvalidEvidence marks provider data that cannot become a fact.
 	FailureInvalidEvidence = "invalid_evidence"
+	// FailureResultTooLarge marks a result that exceeds max_result_bytes.
+	FailureResultTooLarge = "result_too_large"
 	// FailureClaimDeadline marks a claim whose lease deadline passed before
 	// collection finished.
 	FailureClaimDeadline = "claim_deadline_exceeded"
@@ -52,7 +54,7 @@ func failureResult(claim sdk.Claim, observedAt time.Time, class string, terminal
 }
 
 // terminalResult is the bounded terminal shape for bad configuration and
-// denied grants: an explicit terminal state with a named class.
+// oversized results: an explicit terminal state with a named class.
 func terminalResult(claim sdk.Claim, observedAt time.Time, class string) sdk.Result {
 	return failureResult(claim, observedAt, class, true, 0)
 }

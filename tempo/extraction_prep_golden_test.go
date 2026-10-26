@@ -71,7 +71,7 @@ func parityCollectionResult() CollectionResult {
 func collectParityResult(t *testing.T, source *ClaimedSource) testResult {
 	t.Helper()
 
-	got, err := source.Collect(context.Background(), parityTestClaim(t, defaultClaimSpec()), testGrant())
+	got, err := source.Collect(context.Background(), parityTestClaim(t, defaultClaimSpec()))
 	if err != nil {
 		t.Fatalf("Collect(parity) error = %v, want nil", err)
 	}
@@ -273,7 +273,7 @@ func TestExtractionPrepLiveKeysMatchParityPack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClaimedSource(live) error = %v, want nil", err)
 	}
-	got, err := source.Collect(context.Background(), parityTestClaim(t, defaultClaimSpec()), testGrant())
+	got, err := source.Collect(context.Background(), parityTestClaim(t, defaultClaimSpec()))
 	if err != nil {
 		t.Fatalf("Collect(live) error = %v, want nil", err)
 	}

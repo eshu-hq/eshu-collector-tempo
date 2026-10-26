@@ -186,8 +186,8 @@ func TestManifestMatchesContract(t *testing.T) {
 	if manifest.id != "dev.eshu.collector.tempo" {
 		t.Fatalf("metadata.id = %q, want the task-pinned dev.eshu.collector.tempo", manifest.id)
 	}
-	if manifest.version != "0.1.0" {
-		t.Fatalf("metadata.version = %q, want 0.1.0", manifest.version)
+	if manifest.version != "0.1.1" {
+		t.Fatalf("metadata.version = %q, want 0.1.1", manifest.version)
 	}
 	if manifest.sdkProtocol != "collector-sdk/v1alpha1" {
 		t.Fatalf("sdkProtocol = %q, want collector-sdk/v1alpha1", manifest.sdkProtocol)

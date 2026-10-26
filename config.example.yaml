@@ -26,14 +26,13 @@ process:
   command: ./collector
   args:
     - --sdk-stdio
-  # A tag fan-out can return more than the host's default 4 MiB stdout cap.
-  # Raise this together with per-claim expectations; the collector fails
-  # retryable with claim_deadline_exceeded rather than let the host drop an
-  # oversized result.
+  # 64 MiB: a tag fan-out can return more than the 4 MiB default.
+  # Keep it above config.limits.maxResultBytes.
   stdout_limit_bytes: 67108864
 config:
   targets:
-    - scope_id: tempo:trace:example-prod
+    - provider: tempo
+      scope_id: tempo:trace:example-prod
       instance_id: tempo-example
       base_url: https://tempo.example.test
       path_prefix: ""
@@ -58,23 +57,12 @@ config:
       observed_only_hint: false
       freshness_probe_enabled: true
       lookback: 1h
-  # grant carries the host-delivered core issuance for this producer until
-  # the host defines grant delivery. It holds no secret. Core matches the
-  # producer, version, scope, kind coverage, and expiry at admission; the
-  # collector re-checks the shape at the emission edge and fails closed
-  # without it. The collector never mints one.
-  grant:
-    producer_id: dev.eshu.collector.tempo
-    version: 0.1.0
-    scope: tempo
-    kinds:
-      - kind: observability.source_instance
-        schema_versions: ["1.0.0"]
-      - kind: observability.observed_trace_signal
-        schema_versions: ["1.0.0"]
-      - kind: observability.coverage_warning
-        schema_versions: ["1.0.0"]
-    # Refresh both timestamps before use: the lifetime cannot exceed 720h
-    # and the collector fails closed on an expired grant.
-    issued_at: 2026-10-26T12:00:00Z
-    expires_at: 2026-11-25T12:00:00Z
+  # limits carries the shared host-level limits stanza. The host enforces
+  # claim budgets; the satellite consumes maxResultBytes so its own
+  # encoded-result bound matches what the operator approved. No grant
+  # material ever arrives here: authorization is host-enforced at emission.
+  limits:
+    maxRecordsPerClaim: 50000
+    maxPayloadBytes: 1048576
+    maxResultBytes: 3145728
+    claimTimeoutSeconds: 300

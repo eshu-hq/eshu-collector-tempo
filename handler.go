@@ -13,7 +13,6 @@ import (
 	sdk "github.com/eshu-hq/eshu-sdk/collector"
 	"github.com/eshu-hq/eshu-sdk/collector/transport"
 
-	"github.com/eshu-hq/eshu-collector-tempo/grant"
 	"github.com/eshu-hq/eshu-collector-tempo/tempo"
 )
 
@@ -52,19 +51,16 @@ func (h Handler) getenv(key string) string {
 // Handle collects the Tempo target named by the claim and returns the SDK
 // result the host validates and commits. It never returns facts together
 // with a failure state, never lets a credential into a result, and echoes
-// the claim unchanged so the host's identity check passes. A denied or
-// missing producer grant fails closed as terminal invalid_config before any
-// provider contact.
+// the claim unchanged so the host's identity check passes. A bad activation
+// fails closed as terminal invalid_config before any provider contact.
+// Authorization is host-enforced at emission; the satellite carries no grant
+// material.
 func (h Handler) Handle(ctx context.Context, request Request) sdk.Result {
 	started := h.now()
 	claim := request.Claim
 
 	parsed, err := parseSettings(request.Config, h.getenv)
 	if err != nil {
-		h.logLine(claim, FailureInvalidConfig, "")
-		return terminalResult(claim, started, FailureInvalidConfig)
-	}
-	if err := grant.Check(parsed.grant, started); err != nil {
 		h.logLine(claim, FailureInvalidConfig, "")
 		return terminalResult(claim, started, FailureInvalidConfig)
 	}
@@ -78,8 +74,17 @@ func (h Handler) Handle(ctx context.Context, request Request) sdk.Result {
 		h.logLine(claim, FailureInvalidConfig, "")
 		return terminalResult(claim, started, FailureInvalidConfig)
 	}
-	result, err := source.Collect(ctx, claim, parsed.grant)
+	result, err := source.Collect(ctx, claim)
 	if err == nil {
+		encoded, marshalErr := json.Marshal(result)
+		if marshalErr != nil {
+			h.logLine(claim, FailureInvalidEvidence, "")
+			return terminalResult(claim, started, FailureInvalidEvidence)
+		}
+		if len(encoded) > parsed.maxResultBytes {
+			h.logLine(claim, FailureResultTooLarge, "")
+			return terminalResult(claim, started, FailureResultTooLarge)
+		}
 		return result
 	}
 	var providerFailure transport.ProviderFailure

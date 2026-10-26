@@ -9,8 +9,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/eshu-hq/eshu-collector-tempo/grant"
 	"github.com/eshu-hq/eshu-collector-tempo/tempo"
+)
+
+const (
+	// DefaultMaxResultBytes keeps one result under the host's default 4 MiB
+	// standard-output limit.
+	DefaultMaxResultBytes = 3500000
+	// maxResultBytesCeiling bounds an operator-raised max_result_bytes.
+	maxResultBytesCeiling = 64 << 20
 )
 
 // targetJSON is the activation config shape for one Tempo API target. It
@@ -22,7 +29,10 @@ import (
 // contact. stale_after is accepted and validated for activation parity but is
 // core-owned and never reaches the producer: the extracted TargetConfig
 // carries no StaleAfter field (see the satellite README, "Boundaries").
+// provider carries the host-passed per-target provider key: the host always
+// sends "tempo" here, and anything else fails closed as a typo.
 type targetJSON struct {
+	Provider              string   `json:"provider"`
 	ScopeID               string   `json:"scope_id"`
 	InstanceID            string   `json:"instance_id"`
 	BaseURL               string   `json:"base_url"`
@@ -41,38 +51,30 @@ type targetJSON struct {
 	Lookback              string   `json:"lookback"`
 }
 
-// kindGrantJSON is one covered core-owned fact kind in the host-delivered
-// grant. The list form matches the in-tree producer-grant draft
-// (producer-grant.manifest.DRAFT.yaml in eshu-hq/eshu go/cmd/collector-tempo).
-type kindGrantJSON struct {
-	Kind           string   `json:"kind"`
-	SchemaVersions []string `json:"schema_versions"`
+// limitsJSON is the shared host-level limits stanza. Only maxResultBytes has
+// a satellite-side consumer: it bounds the encoded result so the satellite's
+// own bound matches what the operator approved. The rest are accepted so the
+// verbatim envelope parses and host-side enforcement stays the single owner.
+// No grant material ever arrives here: core-owned-kind authorization is
+// host-enforced at emission.
+type limitsJSON struct {
+	MaxRecordsPerClaim  int `json:"maxRecordsPerClaim"`
+	MaxPayloadBytes     int `json:"maxPayloadBytes"`
+	MaxResultBytes      int `json:"maxResultBytes"`
+	ClaimTimeoutSeconds int `json:"claimTimeoutSeconds"`
 }
 
-// grantJSON is the wire shape of the host-delivered core issuance the
-// activation carries until the host defines grant delivery. It carries no
-// secret: core matches the producer, version, scope, kind coverage, and
-// expiry at admission, and this edge re-checks the shape at every emission.
-// issued_at and expires_at bound the grant lifetime to 720h; the collector
-// never mints one.
-type grantJSON struct {
-	ProducerID string          `json:"producer_id"`
-	Version    string          `json:"version"`
-	Scope      string          `json:"scope"`
-	Kinds      []kindGrantJSON `json:"kinds"`
-	IssuedAt   time.Time       `json:"issued_at"`
-	ExpiresAt  time.Time       `json:"expires_at"`
-}
-
-// settings is the parsed activation: the producer targets plus the
-// host-delivered grant the emission edge enforces.
+// settings is the parsed activation: the producer targets plus the encoded
+// result bound. The host delivers the activation config block verbatim,
+// including its shared limits stanza; authorization material never arrives
+// here because core-owned-kind authorization is host-enforced at emission.
 type settings struct {
-	targets []tempo.TargetConfig
-	grant   grant.Grant
+	targets        []tempo.TargetConfig
+	maxResultBytes int
 }
 
 // parseSettings decodes the activation config into producer targets and the
-// host-delivered grant. The claim's instance id becomes the producer's
+// encoded result bound. The claim's instance id becomes the producer's
 // collector identity. Credential values never enter errors: a missing token
 // names the variable, never its content.
 func parseSettings(config map[string]any, getenv func(string) string) (settings, error) {
@@ -82,7 +84,7 @@ func parseSettings(config map[string]any, getenv func(string) string) (settings,
 	}
 	var decoded struct {
 		Targets []targetJSON `json:"targets"`
-		Grant   *grantJSON   `json:"grant"`
+		Limits  *limitsJSON  `json:"limits"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
@@ -100,14 +102,17 @@ func parseSettings(config map[string]any, getenv func(string) string) (settings,
 		}
 		targets = append(targets, mapped)
 	}
-	if decoded.Grant == nil {
-		return settings{}, fmt.Errorf("config grant is required: the host must deliver the core-issued producer grant")
+	maxResultBytes := 0
+	if decoded.Limits != nil {
+		maxResultBytes = decoded.Limits.MaxResultBytes
 	}
-	mapped, err := mapGrant(decoded.Grant)
-	if err != nil {
-		return settings{}, fmt.Errorf("grant: %w", err)
+	if maxResultBytes < 0 || maxResultBytes > maxResultBytesCeiling {
+		return settings{}, fmt.Errorf("limits.maxResultBytes must be between 0 and %d", maxResultBytesCeiling)
 	}
-	return settings{targets: targets, grant: mapped}, nil
+	if maxResultBytes == 0 {
+		maxResultBytes = DefaultMaxResultBytes
+	}
+	return settings{targets: targets, maxResultBytes: maxResultBytes}, nil
 }
 
 // mapTarget resolves one configured target against the process environment,
@@ -115,8 +120,12 @@ func parseSettings(config map[string]any, getenv func(string) string) (settings,
 // unauthenticated Tempo; a named-but-unset variable fails closed. tenant_id
 // is overridden by tenant_id_env when the latter names a set variable. The
 // parsed stale_after is validated and dropped: freshness windowing stays
-// core-owned and the producer TargetConfig carries no such field.
+// core-owned and the producer TargetConfig carries no such field. A
+// non-empty provider must name tempo.
 func mapTarget(target targetJSON, getenv func(string) string) (tempo.TargetConfig, error) {
+	if provider := strings.TrimSpace(target.Provider); provider != "" && provider != tempo.ProviderTempo {
+		return tempo.TargetConfig{}, fmt.Errorf("unsupported tempo provider %q", target.Provider)
+	}
 	token, err := optionalEnvValue(target.TokenEnv, getenv, "token_env")
 	if err != nil {
 		return tempo.TargetConfig{}, err
@@ -147,27 +156,6 @@ func mapTarget(target targetJSON, getenv func(string) string) (tempo.TargetConfi
 		ObservedOnlyHint:     target.ObservedOnlyHint,
 		FreshnessProbeEnable: target.FreshnessProbeEnabled,
 		Lookback:             lookback,
-	}, nil
-}
-
-// mapGrant converts the activation grant into the producer grant shape the
-// emission edge enforces. Timestamps must bound a positive lifetime of at
-// most 720h; grant.Check re-verifies every bound before provider contact.
-func mapGrant(raw *grantJSON) (grant.Grant, error) {
-	kinds := make([]grant.KindGrant, 0, len(raw.Kinds))
-	for _, kind := range raw.Kinds {
-		kinds = append(kinds, grant.KindGrant{
-			Kind:           strings.TrimSpace(kind.Kind),
-			SchemaVersions: append([]string(nil), kind.SchemaVersions...),
-		})
-	}
-	return grant.Grant{
-		ProducerID: strings.TrimSpace(raw.ProducerID),
-		Version:    strings.TrimSpace(raw.Version),
-		Scope:      strings.TrimSpace(raw.Scope),
-		Kinds:      kinds,
-		IssuedAt:   raw.IssuedAt.UTC(),
-		ExpiresAt:  raw.ExpiresAt.UTC(),
 	}, nil
 }
 
