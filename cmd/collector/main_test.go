@@ -110,9 +110,34 @@ func getenv(env map[string]string) func(string) string {
 	return func(key string) string { return env[key] }
 }
 
+// validateManifestKinds proves the manifest-declared (owned) facts in result
+// pass the manifest contract. The producer still emits the shared
+// source_instance and coverage_warning kinds under the edge grant — the host
+// authorizes emission by grant, not by manifest — so they are out of scope
+// for the manifest contract here. Their shapes stay covered by the tempo
+// emission unit tests against the full grant contract plus live QA re-proof.
+func validateManifestKinds(t *testing.T, result sdk.Result) {
+	t.Helper()
+
+	declared := map[string]bool{}
+	for _, kind := range collector.FactKinds() {
+		declared[kind] = true
+	}
+	scoped := result
+	scoped.Facts = nil
+	for _, fact := range result.Facts {
+		if declared[fact.Kind] {
+			scoped.Facts = append(scoped.Facts, fact)
+		}
+	}
+	if _, err := sdk.NewValidator(collector.Contract()).ValidateResult(scoped); err != nil {
+		t.Fatalf("ValidateResult(manifest kinds) error = %v", err)
+	}
+}
+
 // TestRunServesOneClaimFromStdin serves one claim through run and asserts
-// stdout carries exactly one complete SDK result that passes the published
-// validator.
+// stdout carries exactly one complete SDK result whose manifest-declared
+// facts pass the published validator.
 func TestRunServesOneClaimFromStdin(t *testing.T) {
 	t.Parallel()
 
@@ -139,9 +164,7 @@ func TestRunServesOneClaimFromStdin(t *testing.T) {
 		if len(result.Facts) != 2 {
 			t.Fatalf("facts = %d, want 2", len(result.Facts))
 		}
-		if _, err := sdk.NewValidator(collector.Contract()).ValidateResult(result); err != nil {
-			t.Fatalf("ValidateResult() error = %v", err)
-		}
+		validateManifestKinds(t, result)
 	}
 }
 

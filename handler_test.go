@@ -104,10 +104,35 @@ func testHandler(env map[string]string, snapshot tempo.CollectionResult) Handler
 	}
 }
 
+// validateManifestKinds proves the manifest-declared (owned) facts in result
+// pass the manifest contract. The producer still emits the shared
+// source_instance and coverage_warning kinds under the edge grant — the host
+// authorizes emission by grant, not by manifest — so they are out of scope
+// for the manifest contract here. Their shapes stay covered by the tempo
+// emission unit tests against the full grant contract plus live QA re-proof.
+func validateManifestKinds(t *testing.T, result sdk.Result) {
+	t.Helper()
+
+	declared := map[string]bool{}
+	for _, kind := range FactKinds() {
+		declared[kind] = true
+	}
+	scoped := result
+	scoped.Facts = nil
+	for _, fact := range result.Facts {
+		if declared[fact.Kind] {
+			scoped.Facts = append(scoped.Facts, fact)
+		}
+	}
+	if _, err := sdk.NewValidator(Contract()).ValidateResult(scoped); err != nil {
+		t.Fatalf("ValidateResult(manifest kinds) error = %v", err)
+	}
+}
+
 // TestHandleServesOneValidatorCleanResult serves one claim against the stub
 // client and asserts the SDK result is complete, carries source and signal
-// facts, and passes the published SDK validator against this package's
-// contract.
+// facts, and that the manifest-declared facts pass the published SDK
+// validator against this package's contract.
 func TestHandleServesOneValidatorCleanResult(t *testing.T) {
 	t.Parallel()
 
@@ -131,9 +156,7 @@ func TestHandleServesOneValidatorCleanResult(t *testing.T) {
 	if result.Claim.InstanceID != "tempo-primary" {
 		t.Fatalf("echoed InstanceID = %q, want tempo-primary", result.Claim.InstanceID)
 	}
-	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
-		t.Fatalf("ValidateResult() error = %v", err)
-	}
+	validateManifestKinds(t, result)
 }
 
 // TestHandleServesLiveActivationEnvelope serves the literal ops-qa envelope
@@ -202,9 +225,7 @@ func TestHandleServesLiveActivationEnvelope(t *testing.T) {
 	if result.State != sdk.ResultComplete {
 		t.Fatalf("State = %q, want complete for the live-shaped envelope", result.State)
 	}
-	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
-		t.Fatalf("ValidateResult() error = %v", err)
-	}
+	validateManifestKinds(t, result)
 }
 
 // TestHandleResultTooLargeFailsTerminal proves the result byte bound fails
