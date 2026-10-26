@@ -42,6 +42,23 @@ GOPROXY=proxy.golang.org go list -m github.com/eshu-hq/eshu-sdk/factschema@v0.1.
   `go/cmd/collector-tempo`) at every emission. Until core issues a
   grant, the zero Grant is denied and `Collect` fails closed before any
   provider contact.
+- `contract.go`, `request.go`, `config.go`, `handler.go`, `failure.go` —
+  the SDK adapter: the emitted contract, the stdio request wire shape,
+  activation parsing (targets plus the host-delivered grant), and the
+  claim-to-Result handler that maps every outcome to a validator-clean
+  result.
+- `cmd/collector/` — the standalone entrypoint: one claim from stdin by
+  default (`--sdk-stdio`), and `seed` to install the binary and manifest
+  into a component home from an init container.
+- `manifest.yaml` (`manifest_embed.go`) — the component package at version
+  `0.1.0`, with digest-pinned placeholder artifacts and the three emitted
+  kinds at `1.0.0` reported.
+- `Dockerfile` — the static release image the tag-gated workflow publishes.
+- `config.example.yaml` — a starting activation config (placeholders, no
+  secrets).
+- `.github/workflows/` — `ci.yml` (vet, tests with `-race`, import
+  boundary, image seed contract) and `release.yml` (tag-gated image
+  publish with signature and attestations).
 
 ## Parity evidence
 
@@ -138,6 +155,130 @@ This repository mirrors that layout file for file (`doc.go`, `types.go`,
   and tag-value reads are the always-on path.
 - Token is optional (unauthenticated Tempo is a supported target); Loki
   and Grafana treatments of their own credentials are unchanged.
-- No Dockerfile, chart, or collector main: the extracted producer is a
-  library the host embeds, same as the Grafana and Loki producers.
-  Packaging and deployment stay host-owned.
+- Standalone surface added for the QA cutover (#9172): `cmd/collector/`,
+  `Dockerfile`, `manifest.yaml`, and the tag-gated `release.yml`, following
+  the same shape as the Grafana, Loki, and security-alerts satellites. No
+  chart: deployment stays GitOps-owned in `boatsgroup/iac-eks-eshu`.
+
+## Running
+
+The collector runs through the Eshu component-extension host with the
+`process` runner. The host writes one bounded `collector-sdk/v1alpha1`
+request to stdin and reads one result from stdout. The collector gets no
+Postgres, graph, queue, lease, or workflow handle.
+
+```bash
+go run ./cmd/collector < request.json > result.json
+```
+
+A denied or missing producer grant fails closed as terminal
+`invalid_config` before any provider contact; an unconfigured scope fails
+retryable with no facts. A claim arriving with no lease time left fails
+retryable as `claim_deadline_exceeded`. The token stays optional: an empty
+`token_env` means unauthenticated Tempo, while a named-but-unset variable
+fails closed at config parse.
+
+The collector writes one JSON diagnostic line per claim to stderr for local
+runs and tests; the host's process runner drops the text. The line carries
+claim identity and the failure vocabulary only: never a token, URL, or
+provider body.
+
+## Image and seeding
+
+The image holds one static binary that installs itself, so an init container
+needs no shell:
+
+```bash
+collector seed --dest /component [--image-ref ghcr.io/eshu-hq/eshu-collector-tempo@sha256:<digest>]
+```
+
+writes `/component/collector` (mode 0755) and `/component/manifest.yaml`.
+`--image-ref REF` (or the `COLLECTOR_IMAGE_REF` environment variable; the flag
+wins) stamps the deployed digest-pinned reference into the manifest's artifact
+entry, because an image cannot embed its own digest. The repository manifest
+keeps the all-zero placeholder digest permanently (`manifest_test.go` fails on
+a real one), because it is embedded in the binary and a committed digest could
+only describe an older build.
+
+## Cutover identity
+
+Replacing the in-tree Tempo collector with this one must not re-key a single
+fact. These activation values have to equal what the in-tree collector uses
+for the same feed:
+
+| Activation value | Must equal the in-tree value | If it differs |
+| --- | --- | --- |
+| `host.scope.id` | the in-tree target's `scope_id` | every stable key changes: the feed is ingested as a new scope |
+| `host.scope.kind` | `trace_source` | the scope no longer matches the in-tree scope kind |
+| `host.sourceSystem` | the in-tree source system, `tempo` | `source_ref` changes on every fact |
+| activation instance id | the in-tree collector instance id | `collector_instance_id` in payloads changes |
+
+The collector copies `scope_id`, `collector_instance_id`, and `source_system`
+from the claim the host sends; it has no setting of its own for them.
+
+Before enabling an activation, read the values from the live in-tree
+collector instance configuration and write them into the activation. Do not
+copy the placeholders in `config.example.yaml`. Run only one of the two
+collectors per feed: with the same scope and instance id they would write the
+same stable keys.
+
+## Producer grants
+
+The emitted kinds are core-owned, so the host refuses them without a live
+producer grant. Until the host defines grant delivery, the activation carries
+the core-issued grant verbatim under `config.grant` (see
+`config.example.yaml`); the collector re-checks the shape at the emission
+edge and fails closed without it. The grant holds no secret. A grant's scope
+is the collector kind (`tempo`), not a feed. Core issues the grant at cutover
+(one per kind):
+
+```sh
+eshu component grant dev.eshu.collector.tempo --component-home "$HOME_DIR" \
+  --version 0.1.0 --kind observability.source_instance --schema-version 1.0.0 \
+  --scope tempo --expires-in 720h
+eshu component grant dev.eshu.collector.tempo --component-home "$HOME_DIR" \
+  --version 0.1.0 --kind observability.observed_trace_signal --schema-version 1.0.0 \
+  --scope tempo --expires-in 720h
+eshu component grant dev.eshu.collector.tempo --component-home "$HOME_DIR" \
+  --version 0.1.0 --kind observability.coverage_warning --schema-version 1.0.0 \
+  --scope tempo --expires-in 720h
+```
+
+This repository never mints one.
+
+## Releasing
+
+`.github/workflows/release.yml` runs only when a tag `vMAJOR.MINOR.PATCH[-pre]`
+is pushed. Nothing runs on a pull request or a branch push, and the workflow
+deploys nothing.
+
+The workflow refuses to publish unless the tag points at the protected
+`main` head, so a `v*` tag cut from any other commit publishes nothing. As
+defense in depth, restrict who can create `v*` tags with a tag ruleset
+limited to maintainers.
+
+1. Set `metadata.version` in `manifest.yaml` to the version you are releasing
+   and merge that change to `main`. Then tag the merge commit and push the tag.
+   The workflow refuses to publish unless the tag equals `v` plus that version
+   (a `-pre-release` suffix on the tag is allowed when the manifest version has
+   none), and it checks this before it builds or pushes anything.
+2. The workflow builds `linux/amd64` (the only platform the manifest declares),
+   pushes `ghcr.io/eshu-hq/eshu-collector-tempo:<tag>`, writes the
+   digest to the job summary, signs the digest with cosign (keyless), and
+   attaches a SLSA build-provenance attestation and an SPDX SBOM attestation.
+   It needs no secret beyond the job's `GITHUB_TOKEN`.
+3. Copy the `ghcr.io/eshu-hq/eshu-collector-tempo@sha256:<digest>`
+   reference from the job summary into the activation's `seed.image`. The
+   deployment stamps it into the manifest with `collector seed --image-ref`.
+
+## Build and test
+
+```bash
+go build ./...
+go vet ./...
+go test -race -count=1 ./...
+```
+
+`go test -count=1 -run TestImportBoundaryRejectsCoreAndCrossCollectorImports .`
+is the standalone gate: no Eshu internal imports and no cross-collector
+imports beyond the published SDK modules.
