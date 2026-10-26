@@ -1,0 +1,80 @@
+# Example component activation config for the Tempo trace-signal collector.
+# Copy it, replace the placeholder scope and target, and point the *_env
+# entries at real credentials. It holds no secrets: *_env entries NAME
+# environment variables the worker process exports; their values never appear
+# here, in facts, in logs, or in statuses.
+#
+# Cutover identity. When this activation replaces the in-tree Tempo collector,
+# these values must equal the in-tree ones, or every stable fact key and the
+# payload's collector_instance_id change:
+#   host.scope.id        = the in-tree target's scope_id
+#   host.scope.kind      = trace_source
+#   host.sourceSystem    = the in-tree source system (tempo)
+#   activation instance id (--instance) = the in-tree collector instance id
+# The values below are placeholders. Read the real ones from the live in-tree
+# configuration; do not invent new ones.
+host:
+  # Source system recorded on every fact. Match the claim the coordinator plans.
+  sourceSystem: tempo
+  scope:
+    # One activation covers the Tempo targets below. The claim's scope id
+    # selects the target; scope ids are part of every stable fact key, so
+    # choose them once and keep them.
+    id: tempo:trace:example-prod
+    kind: trace_source
+process:
+  command: ./collector
+  args:
+    - --sdk-stdio
+  # A tag fan-out can return more than the host's default 4 MiB stdout cap.
+  # Raise this together with per-claim expectations; the collector fails
+  # retryable with claim_deadline_exceeded rather than let the host drop an
+  # oversized result.
+  stdout_limit_bytes: 67108864
+config:
+  targets:
+    - scope_id: tempo:trace:example-prod
+      instance_id: tempo-example
+      base_url: https://tempo.example.test
+      path_prefix: ""
+      # token_env NAMES an environment variable the worker exports; its value
+      # never enters facts, logs, or statuses. Empty means unauthenticated
+      # Tempo; a named-but-unset variable fails closed before provider
+      # contact.
+      token_env: TEMPO_TOKEN
+      # tenant_id carries a static tenant; tenant_id_env overrides it from
+      # the environment when set. Both are optional and stay out of facts.
+      tenant_id: ""
+      tenant_id_env: TEMPO_TENANT_ID
+      resource_limit: 50
+      tag_value_names:
+        - resource.service.name
+      max_tag_values_per_tag: 20
+      # stale_after is accepted for activation parity and validated, but it
+      # is core-owned: the producer carries no such field and ignores it.
+      stale_after: ""
+      enabled: true
+      declared_ids: []
+      observed_only_hint: false
+      freshness_probe_enabled: true
+      lookback: 1h
+  # grant carries the host-delivered core issuance for this producer until
+  # the host defines grant delivery. It holds no secret. Core matches the
+  # producer, version, scope, kind coverage, and expiry at admission; the
+  # collector re-checks the shape at the emission edge and fails closed
+  # without it. The collector never mints one.
+  grant:
+    producer_id: dev.eshu.collector.tempo
+    version: 0.1.0
+    scope: tempo
+    kinds:
+      - kind: observability.source_instance
+        schema_versions: ["1.0.0"]
+      - kind: observability.observed_trace_signal
+        schema_versions: ["1.0.0"]
+      - kind: observability.coverage_warning
+        schema_versions: ["1.0.0"]
+    # Refresh both timestamps before use: the lifetime cannot exceed 720h
+    # and the collector fails closed on an expired grant.
+    issued_at: 2026-10-26T12:00:00Z
+    expires_at: 2026-11-25T12:00:00Z
