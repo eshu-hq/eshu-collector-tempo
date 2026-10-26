@@ -1,0 +1,14 @@
+tempo/http_client_test.go
+  h_78a442cba0b3e6 8,14,17-18,226-309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0de3c5ff9f5f12f5a9dc3d91c11ef161bc59362a",
+  "prompts": {},
+  "humans": {
+    "h_78a442cba0b3e6": {
+      "author": "Allen Sanabria <asanabria6910@gmail.com>"
+    }
+  }
+}
