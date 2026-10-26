@@ -1,0 +1,66 @@
+.github/workflows/ci.yml
+  h_78a442cba0b3e6 5-10,13-33,36-37,40-79
+.github/workflows/release.yml
+  h_78a442cba0b3e6 1-159
+Dockerfile
+  h_78a442cba0b3e6 1-24
+README.md
+  h_78a442cba0b3e6 45-61,158-284
+boundary_test.go
+  h_78a442cba0b3e6 1-267
+ci_workflow_test.go
+  h_78a442cba0b3e6 1-37
+cmd/collector/main.go
+  h_78a442cba0b3e6 1-120
+cmd/collector/main_test.go
+  h_78a442cba0b3e6 1-316
+cmd/collector/seed.go
+  h_78a442cba0b3e6 1-184
+config.example.yaml
+  h_78a442cba0b3e6 1-80
+config.go
+  h_78a442cba0b3e6 1-238
+config_example_test.go
+  h_78a442cba0b3e6 1-60
+config_test.go
+  h_78a442cba0b3e6 1-224
+contract.go
+  h_78a442cba0b3e6 1-64
+doc.go
+  h_78a442cba0b3e6 1-13
+failure.go
+  h_78a442cba0b3e6 1-95
+go.mod
+  h_78a442cba0b3e6 8
+go.sum
+  h_78a442cba0b3e6 15-16
+handler.go
+  h_78a442cba0b3e6 1-117
+handler_test.go
+  h_78a442cba0b3e6 1-302
+manifest.yaml
+  h_78a442cba0b3e6 1-42
+manifest_embed.go
+  h_78a442cba0b3e6 1-13
+manifest_test.go
+  h_78a442cba0b3e6 1-236
+release_version_test.go
+  h_78a442cba0b3e6 1-118
+release_workflow_test.go
+  h_78a442cba0b3e6 1-270
+request.go
+  h_78a442cba0b3e6 1-109
+request_test.go
+  h_78a442cba0b3e6 1-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "851041b503980ab0a8dec42825b986b4c42f3cbb",
+  "prompts": {},
+  "humans": {
+    "h_78a442cba0b3e6": {
+      "author": "Allen Sanabria <asanabria6910@gmail.com>"
+    }
+  }
+}
