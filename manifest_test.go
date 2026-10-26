@@ -167,9 +167,12 @@ func isPlaceholderImage(image string) bool {
 
 // TestManifestMatchesContract proves the component manifest matches the
 // collector contract: the task-pinned id, the SDK protocol, digest-pinned
-// placeholder artifacts, and exactly the three emitted observability kinds
-// at 1.0.0 reported.
-// reported.
+// placeholder artifacts, and exactly the owned observability kind at 1.0.0
+// reported. Ownership is narrowed to observability.observed_trace_signal so
+// this component co-installs with the Loki collector, which collides on
+// observability.source_instance. The producer still emits the shared
+// source_instance and coverage_warning kinds under the edge grant; the
+// manifest declares ownership, not the full emission set.
 func TestManifestMatchesContract(t *testing.T) {
 	t.Parallel()
 
@@ -186,8 +189,8 @@ func TestManifestMatchesContract(t *testing.T) {
 	if manifest.id != "dev.eshu.collector.tempo" {
 		t.Fatalf("metadata.id = %q, want the task-pinned dev.eshu.collector.tempo", manifest.id)
 	}
-	if manifest.version != "0.1.1" {
-		t.Fatalf("metadata.version = %q, want 0.1.1", manifest.version)
+	if manifest.version != "0.1.2" {
+		t.Fatalf("metadata.version = %q, want 0.1.2", manifest.version)
 	}
 	if manifest.sdkProtocol != "collector-sdk/v1alpha1" {
 		t.Fatalf("sdkProtocol = %q, want collector-sdk/v1alpha1", manifest.sdkProtocol)
@@ -226,9 +229,7 @@ func TestManifestMatchesContract(t *testing.T) {
 		}
 	}
 	wantOrderedKinds := []string{
-		"observability.source_instance",
 		"observability.observed_trace_signal",
-		"observability.coverage_warning",
 	}
 	if !reflect.DeepEqual(FactKinds(), wantOrderedKinds) {
 		t.Fatalf("FactKinds() = %v, want exactly %v", FactKinds(), wantOrderedKinds)
