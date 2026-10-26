@@ -98,7 +98,11 @@ Failure classification: 403/401 append a `permission_hidden` warning and
 degrade to partial; 404/405 append `unsupported`; 429 appends
 `rate_limited` and returns a retryable provider error; anything else
 returns a terminal provider error. Unknown claim scope IDs fail as
-retryable provider failures.
+retryable provider failures. Two in-tree config knobs have no producer
+counterpart: the per-target `Now` clock hook is dropped (test-only
+narrowing; production-identical when nil) and `StaleAfter` is dropped
+from `TargetConfig` (core-config-parsed, producer-unread — correctly
+core-owned).
 
 ## Deferred to the host
 
