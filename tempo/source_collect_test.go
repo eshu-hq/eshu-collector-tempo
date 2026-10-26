@@ -12,8 +12,6 @@ import (
 
 	"github.com/eshu-hq/eshu-sdk/collector"
 	"github.com/eshu-hq/eshu-sdk/collector/transport"
-
-	"github.com/eshu-hq/eshu-collector-tempo/grant"
 )
 
 type stubEvidenceClient struct {
@@ -70,22 +68,6 @@ func testClaim() collector.Claim {
 		Attempt:       1,
 		Deadline:      time.Now().UTC().Add(time.Hour),
 		ConfigHandle:  "config-1",
-	}
-}
-
-func testGrant() grant.Grant {
-	now := time.Now().UTC()
-	return grant.Grant{
-		ProducerID: grant.ProducerID,
-		Version:    grant.Version,
-		Scope:      grant.Scope,
-		Kinds: []grant.KindGrant{
-			{Kind: KindSourceInstance, SchemaVersions: []string{SchemaVersionV1}},
-			{Kind: KindObservedTraceSignal, SchemaVersions: []string{SchemaVersionV1}},
-			{Kind: KindCoverageWarning, SchemaVersions: []string{SchemaVersionV1}},
-		},
-		IssuedAt:  now,
-		ExpiresAt: now.Add(720 * time.Hour),
 	}
 }
 
@@ -188,7 +170,7 @@ func TestCollectEmitsValidatorCleanResult(t *testing.T) {
 	t.Parallel()
 
 	source := testSource(t, &stubEvidenceClient{result: stubSnapshot()})
-	got, err := source.Collect(context.Background(), testClaim(), testGrant())
+	got, err := source.Collect(context.Background(), testClaim())
 	if err != nil {
 		t.Fatalf("Collect() error = %v, want nil", err)
 	}
@@ -227,7 +209,7 @@ func TestCollectPartialReadStaysPartial(t *testing.T) {
 	snapshot := stubSnapshot()
 	snapshot.Stats.Partial = true
 	source := testSource(t, &stubEvidenceClient{result: snapshot})
-	got, err := source.Collect(context.Background(), testClaim(), testGrant())
+	got, err := source.Collect(context.Background(), testClaim())
 	if err != nil {
 		t.Fatalf("Collect() error = %v, want nil", err)
 	}
@@ -239,17 +221,6 @@ func TestCollectPartialReadStaysPartial(t *testing.T) {
 	}
 }
 
-func TestCollectFailsClosedWithoutGrant(t *testing.T) {
-	t.Parallel()
-
-	source := testSource(t, &stubEvidenceClient{result: stubSnapshot()})
-	if _, err := source.Collect(context.Background(), testClaim(), grant.Grant{}); err == nil {
-		t.Error("Collect(zero grant) = nil, want fail-closed grant denial")
-	} else if !errors.Is(err, grant.ErrDenied) {
-		t.Errorf("Collect(zero grant) error = %v, want grant.ErrDenied", err)
-	}
-}
-
 func TestCollectRejectsForeignClaim(t *testing.T) {
 	t.Parallel()
 
@@ -257,25 +228,25 @@ func TestCollectRejectsForeignClaim(t *testing.T) {
 
 	wrongInstance := testClaim()
 	wrongInstance.InstanceID = "collector-other"
-	if _, err := source.Collect(context.Background(), wrongInstance, testGrant()); err == nil {
+	if _, err := source.Collect(context.Background(), wrongInstance); err == nil {
 		t.Error("Collect(foreign instance) = nil, want rejection")
 	}
 
 	wrongKind := testClaim()
 	wrongKind.CollectorKind = "loki"
-	if _, err := source.Collect(context.Background(), wrongKind, testGrant()); err == nil {
+	if _, err := source.Collect(context.Background(), wrongKind); err == nil {
 		t.Error("Collect(foreign kind) = nil, want rejection")
 	}
 
 	wrongSystem := testClaim()
 	wrongSystem.SourceSystem = "loki"
-	if _, err := source.Collect(context.Background(), wrongSystem, testGrant()); err == nil {
+	if _, err := source.Collect(context.Background(), wrongSystem); err == nil {
 		t.Error("Collect(foreign source_system) = nil, want rejection")
 	}
 
 	blankGeneration := testClaim()
 	blankGeneration.GenerationID = ""
-	if _, err := source.Collect(context.Background(), blankGeneration, testGrant()); err == nil {
+	if _, err := source.Collect(context.Background(), blankGeneration); err == nil {
 		t.Error("Collect(blank generation) = nil, want rejection")
 	}
 }
@@ -286,7 +257,7 @@ func TestCollectUnknownScopeIsRetryable(t *testing.T) {
 	source := testSource(t, &stubEvidenceClient{result: stubSnapshot()})
 	claim := testClaim()
 	claim.Scope.ID = "tempo:parity:missing"
-	_, err := source.Collect(context.Background(), claim, testGrant())
+	_, err := source.Collect(context.Background(), claim)
 	if err == nil {
 		t.Fatal("Collect(unknown scope) = nil, want retryable failure")
 	}
@@ -304,7 +275,7 @@ func TestCollectClassifiesProviderFailure(t *testing.T) {
 
 	providerErr := ProviderHTTPError{Provider: "tempo", StatusCode: 429, Message: "Too Many Requests"}
 	source := testSource(t, &stubEvidenceClient{err: providerErr})
-	_, err := source.Collect(context.Background(), testClaim(), testGrant())
+	_, err := source.Collect(context.Background(), testClaim())
 	if err == nil {
 		t.Fatal("Collect(provider 429) = nil, want classified failure")
 	}
@@ -344,7 +315,7 @@ func TestCollectClassifiesTerminalFailures(t *testing.T) {
 			t.Parallel()
 
 			source := testSource(t, &stubEvidenceClient{err: tt.err})
-			_, err := source.Collect(context.Background(), testClaim(), testGrant())
+			_, err := source.Collect(context.Background(), testClaim())
 			if err == nil {
 				t.Fatal("Collect() error = nil, want provider failure")
 			}

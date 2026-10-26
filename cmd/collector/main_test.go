@@ -76,12 +76,13 @@ func claimJSON(t *testing.T, scopeID string) string {
 			WorkItemID:    "work-1",
 			FencingToken:  "7",
 			Attempt:       1,
-			Deadline:      time.Now().Add(time.Hour).UTC(),
+			Deadline:      now.Add(time.Hour).UTC(),
 			ConfigHandle:  "component-config:tempo",
 		},
 		Contract: collector.Contract(),
 		Config: map[string]any{
 			"targets": []any{map[string]any{
+				"provider":               "tempo",
 				"scope_id":               "tempo:trace:example-prod",
 				"instance_id":            "tempo-example",
 				"base_url":               "https://tempo.example.test",
@@ -91,17 +92,11 @@ func claimJSON(t *testing.T, scopeID string) string {
 				"enabled":                true,
 				"lookback":               "1h",
 			}},
-			"grant": map[string]any{
-				"producer_id": collector.ProducerID,
-				"version":     "0.1.0",
-				"scope":       collector.CollectorKind,
-				"kinds": []any{
-					map[string]any{"kind": collector.FactKindSourceInstance, "schema_versions": []any{"1.0.0"}},
-					map[string]any{"kind": collector.FactKindObservedTraceSignal, "schema_versions": []any{"1.0.0"}},
-					map[string]any{"kind": collector.FactKindCoverageWarning, "schema_versions": []any{"1.0.0"}},
-				},
-				"issued_at":  now.Format(time.RFC3339),
-				"expires_at": now.Add(time.Hour).UTC().Format(time.RFC3339),
+			"limits": map[string]any{
+				"maxRecordsPerClaim":  float64(50000),
+				"maxPayloadBytes":     float64(1048576),
+				"maxResultBytes":      float64(3500000),
+				"claimTimeoutSeconds": float64(300),
 			},
 		},
 	})

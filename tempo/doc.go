@@ -11,8 +11,8 @@
 // tenant headers, credentials, or provider response bodies. Core owns
 // admission, projection, persistence, claim mutation, fencing, and
 // declared/applied/observed comparison: this package returns a
-// collector.Result per host claim and enforces the core-issued producer
-// grant (see the grant package) at every emission.
+// collector.Result per host claim. Authorization is host-enforced at
+// emission; this package carries no grant material.
 //
 // Extracted from eshu-hq/eshu go/internal/collector/observability/tempo
 // (#8867). Contract payloads merge through the pinned

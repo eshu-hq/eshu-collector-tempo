@@ -11,8 +11,6 @@ import (
 
 	"github.com/eshu-hq/eshu-sdk/collector"
 	"github.com/eshu-hq/eshu-sdk/collector/transport"
-
-	"github.com/eshu-hq/eshu-collector-tempo/grant"
 )
 
 type targetRuntime struct {
@@ -23,9 +21,9 @@ type targetRuntime struct {
 // ClaimedSource resolves host workflow claims into observability source
 // facts. It owns target validation, normalization, envelope construction,
 // and source-local failure classification only: admission, projection,
-// persistence, claim mutation, and fencing stay core-owned. Every Collect
-// call enforces the core-issued producer grant first and fails closed
-// without one.
+// persistence, claim mutation, fencing, and authorization stay core-owned.
+// Authorization is host-enforced at emission, so Collect carries no grant
+// material.
 //
 // Telemetry note: the in-tree producer spans tempo.observe/tempo.fetch on
 // core-owned tracers. This package has no tracer; the host observes the
@@ -83,19 +81,15 @@ func NewClaimedSource(config SourceConfig) (*ClaimedSource, error) {
 }
 
 // Collect binds one host claim to its configured target, fetches bounded
-// live metadata, and returns a collector-sdk/v1alpha1 Result. The grant is
-// enforced at every emission: without a usable core-issued grant Collect
-// fails closed before any provider contact. Provider failures return a
-// classified transport.ProviderFailure for host claim disposition; the
-// producer never decides retryable-vs-terminal claim fate itself.
+// live metadata, and returns a collector-sdk/v1alpha1 Result. Authorization
+// is host-enforced at emission, so Collect carries no grant material.
+// Provider failures return a classified transport.ProviderFailure for host
+// claim disposition; the producer never decides retryable-vs-terminal claim
+// fate itself.
 func (s *ClaimedSource) Collect(
 	ctx context.Context,
 	claim collector.Claim,
-	g grant.Grant,
 ) (collector.Result, error) {
-	if err := grant.Check(g, time.Now()); err != nil {
-		return collector.Result{}, err
-	}
 	if strings.TrimSpace(claim.InstanceID) != s.collectorInstanceID {
 		return collector.Result{}, fmt.Errorf(
 			"tempo work item collector_instance_id %q does not match source %q",

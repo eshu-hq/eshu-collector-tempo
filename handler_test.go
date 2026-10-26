@@ -67,28 +67,14 @@ func testClaim() sdk.Claim {
 }
 
 // testConfig returns the activation config every handler test serves: one
-// token_env Tempo target plus the host-delivered producer grant.
+// token_env Tempo target with the shared limits stanza and no grant material.
+// Authorization is host-enforced at emission.
 func testConfig(t *testing.T) map[string]any {
 	t.Helper()
 
-	// The expiry sits one hour after the real clock: both the handler
-	// pre-check and Collect enforce the grant against time.Now, so a fixed
-	// test clock in the past would deny it either as expired (Collect) or as
-	// exceeding the maximum lifetime (the pre-check).
-	grant := map[string]any{
-		"producer_id": ProducerID,
-		"version":     "0.1.0",
-		"scope":       CollectorKind,
-		"kinds": []any{
-			map[string]any{"kind": FactKindSourceInstance, "schema_versions": []any{"1.0.0"}},
-			map[string]any{"kind": FactKindObservedTraceSignal, "schema_versions": []any{"1.0.0"}},
-			map[string]any{"kind": FactKindCoverageWarning, "schema_versions": []any{"1.0.0"}},
-		},
-		"issued_at":  time.Now().UTC().Format(time.RFC3339),
-		"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
-	}
 	return map[string]any{
 		"targets": []any{map[string]any{
+			"provider":               "tempo",
 			"scope_id":               "tempo:trace:example-prod",
 			"instance_id":            "tempo-example",
 			"base_url":               "https://tempo.example.test",
@@ -98,13 +84,16 @@ func testConfig(t *testing.T) map[string]any {
 			"enabled":                true,
 			"lookback":               "1h",
 		}},
-		"grant": grant,
+		"limits": map[string]any{
+			"maxRecordsPerClaim":  float64(50000),
+			"maxPayloadBytes":     float64(1048576),
+			"maxResultBytes":      float64(3500000),
+			"claimTimeoutSeconds": float64(300),
+		},
 	}
 }
 
 // testHandler returns a Handler wired to the stub client and a static env.
-// The clock is real: Collect enforces the grant against time.Now, so a fixed
-// past clock would deny a live grant as expired.
 func testHandler(env map[string]string, snapshot tempo.CollectionResult) Handler {
 	return Handler{
 		Getenv: func(key string) string { return env[key] },
@@ -147,78 +136,100 @@ func TestHandleServesOneValidatorCleanResult(t *testing.T) {
 	}
 }
 
-// TestHandleDeniesMissingGrantWithoutProviderContact fails closed with a
-// terminal invalid_config result when the host delivers no producer grant,
-// and never constructs a provider client.
-func TestHandleDeniesMissingGrantWithoutProviderContact(t *testing.T) {
+// TestHandleServesLiveActivationEnvelope serves the literal ops-qa envelope
+// (per-target provider, shared limits stanza, no grant) and asserts it
+// passes validation. This mirrors the pagerduty live-envelope proof.
+func TestHandleServesLiveActivationEnvelope(t *testing.T) {
 	t.Parallel()
 
-	contacted := false
+	env := map[string]string{}
 	handler := Handler{
-		Getenv: func(key string) string { return "token-value" },
-		Now:    time.Now,
+		Getenv: func(key string) string { return env[key] },
+		Now:    func() time.Time { return time.Now().UTC() },
 		ClientFactory: func(tempo.TargetConfig) (tempo.EvidenceClient, error) {
-			contacted = true
-			return stubTempoClient{}, nil
+			return stubTempoClient{snapshot: fixtureSnapshot()}, nil
 		},
 	}
-	config := testConfig(t)
-	delete(config, "grant")
+	claim := testClaim()
+	claim.Scope.ID = "tempo:ops-qa"
+	config := map[string]any{
+		"targets": []any{map[string]any{
+			"provider":       "tempo",
+			"scope_id":       "tempo:ops-qa",
+			"instance_id":    "ops-qa",
+			"base_url":       "https://tempo.example.test",
+			"resource_limit": float64(50),
+			"enabled":        true,
+		}},
+		"limits": map[string]any{
+			"maxRecordsPerClaim":  float64(50000),
+			"maxPayloadBytes":     float64(1048576),
+			"maxResultBytes":      float64(3145728),
+			"claimTimeoutSeconds": float64(300),
+		},
+	}
 	result := handler.Handle(context.Background(), Request{
+		ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
+		Claim:           claim,
+		Contract:        Contract(),
+		Config:          config,
+	})
+	// The stub scope is example-prod, so an ops-qa claim routes to a retryable
+	// miss; the point is the activation parses (no invalid_config). Serve the
+	// matching scope to prove the full path is validator-clean.
+	if failureClass(result) == FailureInvalidConfig {
+		t.Fatalf("live envelope failed with invalid_config; want it to parse")
+	}
+	claim.Scope.ID = "tempo:trace:example-prod"
+	config["targets"] = []any{map[string]any{
+		"provider":               "tempo",
+		"scope_id":               "tempo:trace:example-prod",
+		"instance_id":            "tempo-example",
+		"base_url":               "https://tempo.example.test",
+		"token_env":              "TEMPO_TOKEN",
+		"resource_limit":         float64(50),
+		"max_tag_values_per_tag": float64(20),
+		"enabled":                true,
+		"lookback":               "1h",
+	}}
+	handler = testHandler(map[string]string{"TEMPO_TOKEN": "token-value"}, fixtureSnapshot())
+	result = handler.Handle(context.Background(), Request{
 		ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
 		Claim:           testClaim(),
 		Contract:        Contract(),
 		Config:          config,
 	})
-	if contacted {
-		t.Fatal("missing grant constructed a provider client; emission must fail closed first")
-	}
-	if result.State != sdk.ResultTerminal {
-		t.Fatalf("State = %q, want terminal", result.State)
-	}
-	if len(result.Facts) != 0 {
-		t.Fatalf("facts = %d, want 0 with a failure state", len(result.Facts))
-	}
-	if failureClass(result) != FailureInvalidConfig {
-		t.Fatalf("failure class = %q, want %q", failureClass(result), FailureInvalidConfig)
+	if result.State != sdk.ResultComplete {
+		t.Fatalf("State = %q, want complete for the live-shaped envelope", result.State)
 	}
 	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
 		t.Fatalf("ValidateResult() error = %v", err)
 	}
 }
 
-// TestHandleDeniesForeignGrant proves a grant for another producer fails
-// closed as terminal invalid_config before any provider contact.
-func TestHandleDeniesForeignGrant(t *testing.T) {
+// TestHandleResultTooLargeFailsTerminal proves the result byte bound fails
+// terminal with result_too_large instead of reaching the host.
+func TestHandleResultTooLargeFailsTerminal(t *testing.T) {
 	t.Parallel()
 
-	contacted := false
-	handler := Handler{
-		Getenv: func(key string) string { return "token-value" },
-		Now:    time.Now,
-		ClientFactory: func(tempo.TargetConfig) (tempo.EvidenceClient, error) {
-			contacted = true
-			return stubTempoClient{}, nil
-		},
-	}
+	env := map[string]string{"TEMPO_TOKEN": "token-value"}
+	handler := testHandler(env, fixtureSnapshot())
 	config := testConfig(t)
-	live := liveGrant()
-	live["producer_id"] = "dev.eshu.collector.loki"
-	config["grant"] = live
+	config["limits"] = map[string]any{"maxResultBytes": float64(10)}
 	result := handler.Handle(context.Background(), Request{
 		ProtocolVersion: sdk.ProtocolVersionV1Alpha1,
 		Claim:           testClaim(),
 		Contract:        Contract(),
 		Config:          config,
 	})
-	if contacted {
-		t.Fatal("foreign grant constructed a provider client; emission must fail closed first")
-	}
 	if result.State != sdk.ResultTerminal {
 		t.Fatalf("State = %q, want terminal", result.State)
 	}
-	if failureClass(result) != FailureInvalidConfig {
-		t.Fatalf("failure class = %q, want %q", failureClass(result), FailureInvalidConfig)
+	if failureClass(result) != FailureResultTooLarge {
+		t.Fatalf("failure class = %q, want %q", failureClass(result), FailureResultTooLarge)
+	}
+	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
+		t.Fatalf("ValidateResult() error = %v", err)
 	}
 }
 
