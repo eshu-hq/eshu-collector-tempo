@@ -4,7 +4,7 @@ metadata:
   id: dev.eshu.collector.tempo
   name: Tempo collector
   publisher: eshu-hq
-  version: 0.1.2
+  version: 0.1.3
 spec:
   compatibleCore: ">=0.0.5 <0.2.0"
   componentType: collector
@@ -16,16 +16,26 @@ spec:
   artifacts:
     - platform: linux/amd64
       image: ghcr.io/eshu-hq/eshu-collector-tempo@sha256:0000000000000000000000000000000000000000000000000000000000000000
-  # Ownership (v0.1.2): the manifest declares only the owned
-  # observability.observed_trace_signal kind so this component co-installs
-  # with the Loki collector, which collides on
-  # observability.source_instance. The producer still emits the shared
-  # source_instance and coverage_warning kinds. Edge emission stays
+  # Full emission (v0.1.3): the manifest declares all three emitted
+  # observability kinds, each at schema 1.0.0 reported with a
+  # payloadSchemaRef equal to its kind. Edge emission stays
   # grant-authorized (the host classifies by grant, not by manifest) and the
   # grant keeps all three covered kinds.
   emittedFacts:
+    - kind: observability.source_instance
+      payloadSchemaRef: observability.source_instance
+      schemaVersions:
+        - 1.0.0
+      sourceConfidence:
+        - reported
     - kind: observability.observed_trace_signal
       payloadSchemaRef: observability.observed_trace_signal
+      schemaVersions:
+        - 1.0.0
+      sourceConfidence:
+        - reported
+    - kind: observability.coverage_warning
+      payloadSchemaRef: observability.coverage_warning
       schemaVersions:
         - 1.0.0
       sourceConfidence:

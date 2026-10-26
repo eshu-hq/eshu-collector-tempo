@@ -104,35 +104,24 @@ func testHandler(env map[string]string, snapshot tempo.CollectionResult) Handler
 	}
 }
 
-// validateManifestKinds proves the manifest-declared (owned) facts in result
-// pass the manifest contract. The producer still emits the shared
-// source_instance and coverage_warning kinds under the edge grant — the host
-// authorizes emission by grant, not by manifest — so they are out of scope
-// for the manifest contract here. Their shapes stay covered by the tempo
-// emission unit tests against the full grant contract plus live QA re-proof.
-func validateManifestKinds(t *testing.T, result sdk.Result) {
+// validateFullResult proves the complete unfiltered handler result passes
+// the widened full-emission contract through the published SDK validator.
+// The contract declares all three emitted kinds, so no manifest-scoping
+// filter applies. Per-kind shapes stay covered by the tempo emission unit
+// tests against the grant contract; live QA re-proof against a real Tempo
+// target is pending (NOT_CHECKED).
+func validateFullResult(t *testing.T, result sdk.Result) {
 	t.Helper()
 
-	declared := map[string]bool{}
-	for _, kind := range FactKinds() {
-		declared[kind] = true
-	}
-	scoped := result
-	scoped.Facts = nil
-	for _, fact := range result.Facts {
-		if declared[fact.Kind] {
-			scoped.Facts = append(scoped.Facts, fact)
-		}
-	}
-	if _, err := sdk.NewValidator(Contract()).ValidateResult(scoped); err != nil {
-		t.Fatalf("ValidateResult(manifest kinds) error = %v", err)
+	if _, err := sdk.NewValidator(Contract()).ValidateResult(result); err != nil {
+		t.Fatalf("ValidateResult(full result) error = %v", err)
 	}
 }
 
 // TestHandleServesOneValidatorCleanResult serves one claim against the stub
 // client and asserts the SDK result is complete, carries source and signal
-// facts, and that the manifest-declared facts pass the published SDK
-// validator against this package's contract.
+// facts, and that the full unfiltered result passes the published SDK
+// validator against this package's widened contract.
 func TestHandleServesOneValidatorCleanResult(t *testing.T) {
 	t.Parallel()
 
@@ -156,7 +145,7 @@ func TestHandleServesOneValidatorCleanResult(t *testing.T) {
 	if result.Claim.InstanceID != "tempo-primary" {
 		t.Fatalf("echoed InstanceID = %q, want tempo-primary", result.Claim.InstanceID)
 	}
-	validateManifestKinds(t, result)
+	validateFullResult(t, result)
 }
 
 // TestHandleServesLiveActivationEnvelope serves the literal ops-qa envelope
@@ -225,7 +214,7 @@ func TestHandleServesLiveActivationEnvelope(t *testing.T) {
 	if result.State != sdk.ResultComplete {
 		t.Fatalf("State = %q, want complete for the live-shaped envelope", result.State)
 	}
-	validateManifestKinds(t, result)
+	validateFullResult(t, result)
 }
 
 // TestHandleResultTooLargeFailsTerminal proves the result byte bound fails
