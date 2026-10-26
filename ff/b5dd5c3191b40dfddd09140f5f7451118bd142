@@ -1,0 +1,26 @@
+README.md
+  h_78a442cba0b3e6 49-52,233-238
+cmd/collector/main_test.go
+  h_78a442cba0b3e6 113-137,139-140,167
+contract.go
+  h_78a442cba0b3e6 41-45,52-54
+handler_test.go
+  h_78a442cba0b3e6 107-131,134-135,159,228
+manifest.yaml
+  h_78a442cba0b3e6 7,19-25
+manifest_test.go
+  h_78a442cba0b3e6 170-175,192-193
+tempo/doc.go
+  h_78a442cba0b3e6 9-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ffb5dd5c3191b40dfddd09140f5f7451118bd142",
+  "prompts": {},
+  "humans": {
+    "h_78a442cba0b3e6": {
+      "author": "Allen Sanabria <asanabria6910@gmail.com>"
+    }
+  }
+}
