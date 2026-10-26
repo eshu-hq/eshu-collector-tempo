@@ -46,10 +46,10 @@ GOPROXY=proxy.golang.org go list -m github.com/eshu-hq/eshu-sdk/factschema@v0.1.
   default (`--sdk-stdio`), and `seed` to install the binary and manifest
   into a component home from an init container.
 - `manifest.yaml` (`manifest_embed.go`) — the component package at version
-  `0.1.2`, with digest-pinned placeholder artifacts and the one owned kind
-  (`observability.observed_trace_signal`) at `1.0.0` reported. The manifest
-  declares ownership, not the full emission set: the producer still emits the
-  shared `source_instance` and `coverage_warning` kinds under the edge grant.
+  `0.1.3`, with digest-pinned placeholder artifacts and the three emitted
+  kinds (`observability.source_instance`,
+  `observability.observed_trace_signal`, `observability.coverage_warning`)
+  at `1.0.0` reported.
 - `Dockerfile` — the static release image the tag-gated workflow publishes.
 - `config.example.yaml` — a starting activation config (placeholders, no
   secrets).
@@ -230,11 +230,10 @@ the reconcile init containers), and the satellite carries no grant material.
 `config.grant` is rejected as an unknown field, and the collect path performs
 no grant check.
 
-Ownership is narrowed to `observability.observed_trace_signal` so this
-component co-installs with the Loki collector, which collides on
-`observability.source_instance`. The grant keeps all three covered kinds:
-the host classifies emission by grant, not by manifest, so the shared
-`source_instance` and `coverage_warning` facts still flow.
+The manifest declares the full three-kind emission set at `1.0.0`
+reported, and the grant keeps all three covered kinds: the host classifies
+emission by grant, not by manifest. Live QA re-proof against a real Tempo
+target is pending (NOT_CHECKED).
 
 ## Releasing
 

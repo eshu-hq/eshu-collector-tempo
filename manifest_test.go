@@ -26,6 +26,7 @@ type manifestFacts struct {
 	artifactImages    []string
 	emittedKinds      map[string][]string
 	emittedConfidence map[string][]string
+	emittedSchemaRefs map[string]string
 }
 
 // loadManifestFacts scans manifest.yaml for the asserted subset.
@@ -39,6 +40,7 @@ func loadManifestFacts(t *testing.T) manifestFacts {
 	facts := manifestFacts{
 		emittedKinds:      map[string][]string{},
 		emittedConfidence: map[string][]string{},
+		emittedSchemaRefs: map[string]string{},
 	}
 	var (
 		inEmitted    bool
@@ -89,6 +91,10 @@ func loadManifestFacts(t *testing.T) manifestFacts {
 			currentKind = fieldValue(stripped, "- kind:")
 			facts.emittedKinds[currentKind] = nil
 			inList = ""
+		case strings.HasPrefix(stripped, "payloadSchemaRef:"):
+			if currentKind != "" {
+				facts.emittedSchemaRefs[currentKind] = fieldValue(stripped, "payloadSchemaRef:")
+			}
 		case strings.HasPrefix(stripped, "schemaVersions:"):
 			inList = "versions"
 			facts.emittedKinds[currentKind] = appendInlineList(facts.emittedKinds[currentKind], stripped)
@@ -167,12 +173,8 @@ func isPlaceholderImage(image string) bool {
 
 // TestManifestMatchesContract proves the component manifest matches the
 // collector contract: the task-pinned id, the SDK protocol, digest-pinned
-// placeholder artifacts, and exactly the owned observability kind at 1.0.0
-// reported. Ownership is narrowed to observability.observed_trace_signal so
-// this component co-installs with the Loki collector, which collides on
-// observability.source_instance. The producer still emits the shared
-// source_instance and coverage_warning kinds under the edge grant; the
-// manifest declares ownership, not the full emission set.
+// placeholder artifacts, and exactly the three emitted observability kinds
+// at 1.0.0 reported, each with a payloadSchemaRef equal to its kind.
 func TestManifestMatchesContract(t *testing.T) {
 	t.Parallel()
 
@@ -189,8 +191,8 @@ func TestManifestMatchesContract(t *testing.T) {
 	if manifest.id != "dev.eshu.collector.tempo" {
 		t.Fatalf("metadata.id = %q, want the task-pinned dev.eshu.collector.tempo", manifest.id)
 	}
-	if manifest.version != "0.1.2" {
-		t.Fatalf("metadata.version = %q, want 0.1.2", manifest.version)
+	if manifest.version != "0.1.3" {
+		t.Fatalf("metadata.version = %q, want 0.1.3", manifest.version)
 	}
 	if manifest.sdkProtocol != "collector-sdk/v1alpha1" {
 		t.Fatalf("sdkProtocol = %q, want collector-sdk/v1alpha1", manifest.sdkProtocol)
@@ -228,8 +230,15 @@ func TestManifestMatchesContract(t *testing.T) {
 			t.Fatalf("kind %q confidence=%v, want [reported]", kind, confidence)
 		}
 	}
+	for _, kind := range FactKinds() {
+		if ref := manifest.emittedSchemaRefs[kind]; ref != kind {
+			t.Fatalf("kind %q payloadSchemaRef=%q, want the kind itself", kind, ref)
+		}
+	}
 	wantOrderedKinds := []string{
+		"observability.source_instance",
 		"observability.observed_trace_signal",
+		"observability.coverage_warning",
 	}
 	if !reflect.DeepEqual(FactKinds(), wantOrderedKinds) {
 		t.Fatalf("FactKinds() = %v, want exactly %v", FactKinds(), wantOrderedKinds)

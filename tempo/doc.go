@@ -6,10 +6,7 @@
 //
 // The package reads configured Tempo API targets and emits metadata-only
 // observability.source_instance, observability.observed_trace_signal, and
-// observability.coverage_warning facts. Manifest ownership declares only the
-// observed_trace_signal kind (co-install with the Loki collector, which
-// collides on source_instance); the shared kinds are emitted under the edge
-// grant. It never persists spans, trace
+// observability.coverage_warning facts. It never persists spans, trace
 // retrieval payloads, raw trace IDs, TraceQL bodies, tag values, tenant IDs,
 // tenant headers, credentials, or provider response bodies. Core owns
 // admission, projection, persistence, claim mutation, fencing, and

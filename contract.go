@@ -38,20 +38,17 @@ const (
 	ProducerID = "dev.eshu.collector.tempo"
 )
 
-// FactKinds returns the manifest-declared (owned) fact kinds, in the order
-// the manifest declares them. Only observability.observed_trace_signal is
-// owned here so this component co-installs with the Loki collector, which
-// collides on observability.source_instance. The producer still emits the
-// shared source_instance and coverage_warning kinds under the edge grant.
+// FactKinds returns every fact kind this collector may emit, in the order the
+// manifest declares them.
 func FactKinds() []string {
 	return []string{
+		FactKindSourceInstance,
 		FactKindObservedTraceSignal,
+		FactKindCoverageWarning,
 	}
 }
 
-// Contract returns the manifest contract: the SDK fact families this
-// component owns. Shared kinds stay grant-authorized at the edge and are
-// absent here by design.
+// Contract returns the SDK fact families this collector may emit.
 func Contract() sdk.Contract {
 	kinds := FactKinds()
 	facts := make([]sdk.FactDeclaration, 0, len(kinds))
