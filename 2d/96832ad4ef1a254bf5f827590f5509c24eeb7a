@@ -1,0 +1,62 @@
+.github/workflows/ci.yml
+  h_78a442cba0b3e6 1-19
+README.md
+  h_78a442cba0b3e6 1-139
+go.mod
+  h_78a442cba0b3e6 1-8
+go.sum
+  h_78a442cba0b3e6 1-16
+grant/grant.go
+  h_78a442cba0b3e6 1-150
+grant/grant_test.go
+  h_78a442cba0b3e6 1-85
+tempo/claimid.go
+  h_78a442cba0b3e6 1-30
+tempo/claimid_test.go
+  h_78a442cba0b3e6 1-23
+tempo/client.go
+  h_78a442cba0b3e6 1-253
+tempo/doc.go
+  h_78a442cba0b3e6 1-22
+tempo/endpoint_operation_test.go
+  h_78a442cba0b3e6 1-63
+tempo/envelope.go
+  h_78a442cba0b3e6 1-338
+tempo/envelope_test.go
+  h_78a442cba0b3e6 1-87
+tempo/extraction_prep_golden_test.go
+  h_78a442cba0b3e6 1-301
+tempo/extraction_prep_mirror_test.go
+  h_78a442cba0b3e6 1-311
+tempo/http_client_test.go
+  h_78a442cba0b3e6 1-276
+tempo/metrics.go
+  h_78a442cba0b3e6 1-112
+tempo/normalize.go
+  h_78a442cba0b3e6 1-177
+tempo/redaction.go
+  h_78a442cba0b3e6 1-96
+tempo/schema.go
+  h_78a442cba0b3e6 1-68
+tempo/source.go
+  h_78a442cba0b3e6 1-278
+tempo/source_collect_test.go
+  h_78a442cba0b3e6 1-384
+tempo/test_helpers_test.go
+  h_78a442cba0b3e6 1-20
+tempo/testdata/8867-parity-tempo.json
+  h_78a442cba0b3e6 1-150
+tempo/types.go
+  h_78a442cba0b3e6 1-232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2d96832ad4ef1a254bf5f827590f5509c24eeb7a",
+  "prompts": {},
+  "humans": {
+    "h_78a442cba0b3e6": {
+      "author": "Allen Sanabria <asanabria6910@gmail.com>"
+    }
+  }
+}
