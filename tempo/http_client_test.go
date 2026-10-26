@@ -5,13 +5,17 @@ package tempo
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/eshu-hq/eshu-sdk/collector/transport"
 )
 
 func TestHTTPClientCollectsBoundedTempoMetadata(t *testing.T) {
@@ -216,6 +220,90 @@ func TestHTTPClientReturnsProviderFailureAfterRateLimitRetries(t *testing.T) {
 	}
 	if err.Error() == "rate limited tenant-secret-prod" {
 		t.Fatalf("provider error leaked response body")
+	}
+}
+
+func TestHTTPClientDegradesPermissionHiddenTags(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	client, err := NewHTTPClient(HTTPClientConfig{BaseURL: server.URL, Client: server.Client()})
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error = %v, want nil", err)
+	}
+	result, err := client.CollectObservedMetadata(t.Context(), TargetConfig{
+		ScopeID:    "tempo-prod",
+		InstanceID: "tempo-main",
+		BaseURL:    server.URL,
+	})
+	if err != nil {
+		t.Fatalf("CollectObservedMetadata() error = %v, want degrade not fatal", err)
+	}
+	if len(result.Signals) != 0 {
+		t.Fatalf("len(Signals) = %d, want none after denied tags endpoint", len(result.Signals))
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Reason != WarningPermissionHidden {
+		t.Fatalf("warnings = %#v, want one permission_hidden warning", result.Warnings)
+	}
+	if !result.Stats.Partial {
+		t.Fatal("Partial = false, want partial after denied endpoint")
+	}
+}
+
+func TestHTTPClientReturnsTransportHTTPErrorForServerFailure(t *testing.T) {
+	t.Parallel()
+
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if r.URL.Path != "/api/v2/search/tags" {
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("tempo response body token-secret"))
+	}))
+	defer server.Close()
+
+	client, err := NewHTTPClient(HTTPClientConfig{BaseURL: server.URL, Client: server.Client()})
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error = %v, want nil", err)
+	}
+	result, err := client.CollectObservedMetadata(t.Context(), TargetConfig{
+		ScopeID:    "tempo-prod",
+		InstanceID: "tempo-main",
+		BaseURL:    server.URL,
+	})
+	if err == nil {
+		t.Fatal("CollectObservedMetadata() error = nil, want server failure")
+	}
+	var httpErr transport.HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("CollectObservedMetadata() error = %T, want transport.HTTPError", err)
+	}
+	if got, want := httpErr.StatusCode, http.StatusInternalServerError; got != want {
+		t.Fatalf("StatusCode = %d, want %d", got, want)
+	}
+	if got, want := attempts, maxHTTPRetries+1; got != want {
+		t.Fatalf("attempts = %d, want %d", got, want)
+	}
+	if got, want := result.Stats.Retries, maxHTTPRetries; got != want {
+		t.Fatalf("Retries = %d, want %d", got, want)
+	}
+	if strings.Contains(err.Error(), "token-secret") {
+		t.Fatalf("server failure leaked response body: %v", err)
+	}
+}
+
+func TestNewHTTPClientRejectsUnsafeBaseURL(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewHTTPClient(HTTPClientConfig{BaseURL: "https://user:pass@tempo.example.internal"})
+	if err == nil {
+		t.Fatal("NewHTTPClient() error = nil, want credentials rejected")
 	}
 }
 
