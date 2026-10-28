@@ -274,3 +274,5 @@ imports beyond the published SDK modules.
 
 `make ci` runs the lint, test, and race lanes CI runs
 (`.github/workflows/ci.yml`; the `ci-complete` job aggregates the others).
+
+<!-- skip-proof: docs-only lane check (removed before merge; PR closed unmerged) -->
