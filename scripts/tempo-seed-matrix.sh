@@ -153,36 +153,46 @@ else
 	bad "tidy GREEN after seed removal"
 fi
 
-# --- 500-line cap: seeded 501-line file trips the wc -l step ---
+# --- 500-line cap: seeded over-cap file trips the wc -l step ---
+# Derive the threshold live from the lane the way the floor section derives
+# COVERAGE_FLOOR, so a lane edit propagates to the matrix instead of being
+# silently shadowed by a hardcoded copy.
+# shellcheck disable=SC2016 # $f/$n are literal grep text (fixed-string match), not expansions.
+cap=$(grep -F 'echo "$f: $n lines"' .github/workflows/ci.yml | sed -n 's/.*-gt \([0-9][0-9]*\).*/\1/p')
+if [ -z "$cap" ] || [ "$(printf '%s\n' "$cap" | wc -l)" -ne 1 ]; then
+	echo "FAIL: cap RED (no single live threshold in ci.yml)" | tee -a "$LOG"
+	fail=$((fail + 1))
+else
 {
 	echo "package collector"
 	echo ""
-	echo "// zzSeedCapPad pads this seed past the 500-line cap."
-	for i in $(seq 1 498); do echo "var _ = $i"; done
+	echo "// zzSeedCapPad pads this seed past the live cap ($cap lines)."
+	for i in $(seq 1 "$((cap - 1))"); do echo "var _ = $i"; done
 } > zz_seed_cap.go
 # Intent-to-add so the lane's own `git ls-files '*.go'` loop sees the seed.
 git add -N zz_seed_cap.go
 over=0
 for f in $(git ls-files '*.go'); do
 	n=$(wc -l <"$f")
-	if [ "$n" -gt 500 ] && [ "$f" = "zz_seed_cap.go" ]; then over=1; fi
+	if [ "$n" -gt "$cap" ] && [ "$f" = "zz_seed_cap.go" ]; then over=1; fi
 done
 if [ "$over" -eq 1 ]; then
-	ok "cap RED on seeded 501-line file"
+	ok "cap RED on seeded over-cap file (live cap $cap)"
 else
-	bad "cap RED on seeded 501-line file (loop did not flag the seed)"
+	bad "cap RED on seeded over-cap file (loop did not flag the seed)"
 fi
 git reset -q -- zz_seed_cap.go
 rm -f zz_seed_cap.go
 over=0
 for f in $(git ls-files '*.go'); do
 	n=$(wc -l <"$f")
-	if [ "$n" -gt 500 ]; then echo "$f: $n lines"; over=1; fi
+	if [ "$n" -gt "$cap" ]; then echo "$f: $n lines"; over=1; fi
 done >"$LOG" 2>&1
 if [ "$over" -eq 0 ]; then
 	ok "cap GREEN after seed removal"
 else
 	bad "cap GREEN after seed removal"
+fi
 fi
 
 # --- coverage floor: an unreachable floor fails, the live floor passes ---

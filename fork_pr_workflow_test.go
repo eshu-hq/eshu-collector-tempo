@@ -25,32 +25,27 @@ func forkSafetyProblems(raw []byte) []string {
 	if len(workflow.Permissions) != 1 || workflow.Permissions["contents"] != "read" {
 		problems = append(problems, "top-level permissions hold more than contents: read: fork PR lanes need contents:read alone")
 	}
-	gosec, ok := workflow.Jobs["gosec"]
-	if !ok {
-		return append(problems, "ci.yml has no gosec job")
-	}
-	uploadIdx := stepIndex(gosec.Steps, func(s workflowStep) bool { return strings.Contains(s.Uses, "upload-sarif") })
-	if uploadIdx < 0 {
-		problems = append(problems, "gosec job has no SARIF upload step")
-	} else if !strings.Contains(gosec.Steps[uploadIdx].If, "github.event_name != 'pull_request'") {
-		problems = append(problems, "gosec SARIF upload is not skipped on pull_request: fork PRs cannot write code-scanning results and the lane fails")
-	}
-	for _, name := range []string{"govulncheck", "gosec"} {
-		job, ok := workflow.Jobs[name]
-		if !ok {
-			problems = append(problems, "ci.yml has no "+name+" job")
-			continue
-		}
+	// Scan every job, not just the two schedule-owned lanes: a fork-unsafe
+	// step in any lane breaks fork PRs on a read-only token.
+	for name, job := range workflow.Jobs {
 		for _, step := range job.Steps {
+			if strings.Contains(step.Uses, "upload-sarif") {
+				// Compare the exact gate form: a substring match accepts
+				// tautological conditions (|| true) that run on PRs.
+				if strings.TrimSpace(step.If) != "github.event_name != 'pull_request'" {
+					problems = append(problems, name+" SARIF upload is not skipped on pull_request: fork PRs cannot write code-scanning results and the lane fails")
+				}
+			}
 			if !strings.Contains(step.Run, "gh issue create") {
 				continue
 			}
-			for _, want := range []string{"failure()", "schedule"} {
-				if !strings.Contains(step.If, want) {
-					problems = append(problems, name+" issue step runs without "+want+": a PR lane would need a write token")
-				}
+			if strings.TrimSpace(step.If) != "failure() && github.event_name == 'schedule'" {
+				problems = append(problems, name+" issue step is not failure()-gated on schedule: a PR lane would need a write token")
 			}
 		}
+	}
+	if _, ok := workflow.Jobs["gosec"]; !ok {
+		problems = append(problems, "ci.yml has no gosec job")
 	}
 	for name, job := range workflow.Jobs {
 		for scope, access := range job.Permissions {
@@ -86,6 +81,12 @@ func TestCIWorkflowForkPRSafe(t *testing.T) {
 		},
 		"issue steps run on PRs": func(s string) string {
 			return strings.ReplaceAll(s, "if: failure() && github.event_name == 'schedule'", "if: always()")
+		},
+		"SARIF upload tautology runs on PRs": func(s string) string {
+			return strings.Replace(s, "if: github.event_name != 'pull_request'\n        uses: github/codeql-action/upload-sarif", "if: github.event_name != 'pull_request' || true\n        uses: github/codeql-action/upload-sarif", 1)
+		},
+		"issue step tautology runs on PRs": func(s string) string {
+			return strings.Replace(s, "if: failure() && github.event_name == 'schedule'", "if: failure() || github.event_name == 'schedule' || true", 1)
 		},
 		"job grants actions write": func(s string) string {
 			return strings.Replace(s, "security-events: write", "security-events: write\n      actions: write", 1)
