@@ -386,6 +386,7 @@ jobs:
           # (false-green), and needs.*.result is a bare ARRAY that kills
           # green runs. Proven by the seeded red/green lane proofs in the
           # closing PR; never change this shape without re-seeding.
+          # Re-seed locally: bash scripts/tempo-seed-matrix.sh.
           needs = json.loads(os.environ["NEEDS_JSON"])
           bad = {k: v.get("result") for k, v in needs.items()
                  if isinstance(v, dict) and v.get("result") in ("failure", "cancelled")}
