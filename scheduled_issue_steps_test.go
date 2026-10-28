@@ -8,18 +8,18 @@ import (
 	"testing"
 )
 
-// issueStepProblems returns every way a scheduled findings issue step
-// breaks its create-or-comment contract: the step must carry the
-// failure() plus schedule gate (fork-PR safety), and its body must look
-// up the open findings issue first (gh issue list) and comment on it
-// (gh issue comment), creating (gh issue create) only when none is
-// open — otherwise every weekly run files a duplicate issue.
 // isShellWordByte reports whether b can sit inside a shell word, so the
 // branch-token scan does not match "fi" inside "if" or any other word.
 func isShellWordByte(b byte) bool {
 	return b == '_' || '0' <= b && b <= '9' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
 }
 
+// issueStepProblems returns every way a scheduled findings issue step
+// breaks its create-or-comment contract: the step must carry the
+// failure() plus schedule gate (fork-PR safety), and its body must look
+// up the open findings issue first (gh issue list) and comment on it
+// (gh issue comment), creating (gh issue create) only when none is
+// open — otherwise every weekly run files a duplicate issue.
 func issueStepProblems(run string, issue workflowStep) []string {
 	var problems []string
 	if !strings.Contains(issue.If, "failure()") {
