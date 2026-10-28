@@ -101,27 +101,29 @@ func issueStepProblems(run string, issue workflowStep) []string {
 }
 
 // TestScheduledIssueStepsCreateOrComment pins the weekly-schedule
-// notification shape for both scanning lanes: each findings issue step
-// exists, stays gated on failure() plus schedule, and comments on the
-// open findings issue instead of filing a duplicate every Monday. The
-// live ci.yml text must pass; a create-only mutant and an ungated
-// mutant must fail (mirrors TestCICompleteAggregatesPerJobResults).
+// notification shape for the single caller-side scheduled-findings job
+// (the reusable owns the scanning lanes; it cannot file the issue): the
+// findings step exists, the job stays gated on failure() plus schedule,
+// and the step comments on the open findings issue instead of filing a
+// duplicate every Monday. The live ci.yml text must pass; a create-only
+// mutant and an ungated mutant must fail.
 func TestScheduledIssueStepsCreateOrComment(t *testing.T) {
 	t.Parallel()
 
 	workflow := readCIWorkflow(t)
-	for _, jobName := range []string{"govulncheck", "gosec"} {
-		job, ok := workflow.Jobs[jobName]
-		if !ok {
-			t.Fatalf("ci.yml has no %s job", jobName)
-		}
-		issueIdx := stepIndex(job.Steps, func(s workflowStep) bool { return strings.Contains(s.Run, "gh issue create") })
-		if issueIdx < 0 {
-			t.Fatalf("%s job has no findings issue step", jobName)
-		}
-		if problems := issueStepProblems(job.Steps[issueIdx].Run, job.Steps[issueIdx]); len(problems) > 0 {
-			t.Errorf("%s findings issue step breaks its contract:\n%s", jobName, strings.Join(problems, "\n"))
-		}
+	job, ok := workflow.Jobs["scheduled-findings"]
+	if !ok {
+		t.Fatal("ci.yml has no scheduled-findings job")
+	}
+	issueIdx := stepIndex(job.Steps, func(s workflowStep) bool { return strings.Contains(s.Run, "gh issue create") })
+	if issueIdx < 0 {
+		t.Fatal("scheduled-findings job has no findings issue step")
+	}
+	// The gate lives on the job (one step, one job); the body check reads
+	// the step. Polarity, branch structure, and ordering still apply.
+	gate := workflowStep{If: job.If}
+	if problems := issueStepProblems(job.Steps[issueIdx].Run, gate); len(problems) > 0 {
+		t.Errorf("scheduled-findings issue step breaks its contract:\n%s", strings.Join(problems, "\n"))
 	}
 
 	issue := workflowStep{If: "failure() && github.event_name == 'schedule'"}
