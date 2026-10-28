@@ -378,6 +378,64 @@ func TestGosecIssueStepIsReachable(t *testing.T) {
 	}
 }
 
+// issueStepProblems returns every way a scheduled findings issue step
+// breaks its create-or-comment contract: the step must carry the
+// failure() plus schedule gate (fork-PR safety), and its body must look
+// up the open findings issue first (gh issue list) and comment on it
+// (gh issue comment), creating (gh issue create) only when none is
+// open — otherwise every weekly run files a duplicate issue.
+func issueStepProblems(run string, issue workflowStep) []string {
+	var problems []string
+	for _, want := range []string{"failure()", "schedule"} {
+		if !strings.Contains(issue.If, want) {
+			problems = append(problems, "findings issue step if lacks "+want)
+		}
+	}
+	for _, want := range []string{"gh issue list", "gh issue comment", "gh issue create"} {
+		if !strings.Contains(run, want) {
+			problems = append(problems, "findings issue step body lacks "+want+" (weekly runs would duplicate issues)")
+		}
+	}
+	return problems
+}
+
+// TestScheduledIssueStepsCreateOrComment pins the weekly-schedule
+// notification shape for both scanning lanes: each findings issue step
+// exists, stays gated on failure() plus schedule, and comments on the
+// open findings issue instead of filing a duplicate every Monday. The
+// live ci.yml text must pass; a create-only mutant and an ungated
+// mutant must fail (mirrors TestCICompleteAggregatesPerJobResults).
+func TestScheduledIssueStepsCreateOrComment(t *testing.T) {
+	t.Parallel()
+
+	workflow := readCIWorkflow(t)
+	for _, jobName := range []string{"govulncheck", "gosec"} {
+		job, ok := workflow.Jobs[jobName]
+		if !ok {
+			t.Fatalf("ci.yml has no %s job", jobName)
+		}
+		issueIdx := stepIndex(job.Steps, func(s workflowStep) bool { return strings.Contains(s.Run, "gh issue create") })
+		if issueIdx < 0 {
+			t.Fatalf("%s job has no findings issue step", jobName)
+		}
+		if problems := issueStepProblems(job.Steps[issueIdx].Run, job.Steps[issueIdx]); len(problems) > 0 {
+			t.Errorf("%s findings issue step breaks its contract:\n%s", jobName, strings.Join(problems, "\n"))
+		}
+	}
+
+	issue := workflowStep{If: "failure() && github.event_name == 'schedule'"}
+	// Create-only body: files a duplicate issue every scheduled run.
+	if len(issueStepProblems(`gh issue create --title "$title" --body "$body"`, issue)) == 0 {
+		t.Errorf("create-only body: the gate accepted a step that duplicates issues weekly")
+	}
+	// Ungated step: would fire (and need a token) on fork PRs.
+	ungated := workflowStep{}
+	ungatedRun := `open=$(gh issue list --state open); if [ -n "$open" ]; then gh issue comment "$open"; else gh issue create; fi`
+	if len(issueStepProblems(ungatedRun, ungated)) == 0 {
+		t.Errorf("ungated issue step: the gate accepted a step without failure()/schedule")
+	}
+}
+
 func readCIWorkflow(t *testing.T) workflowFile {
 	t.Helper()
 
