@@ -14,6 +14,25 @@ func isShellWordByte(b byte) bool {
 	return b == '_' || '0' <= b && b <= '9' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
 }
 
+// indexShellWord finds word in s at or after from, matching only with
+// word boundaries on both sides, so "then" never matches "authenticate"
+// and "else" never matches "elsewhere". Returns -1 when absent.
+func indexShellWord(s, word string, from int) int {
+	for i := from; i+len(word) <= len(s); i++ {
+		if s[i:i+len(word)] != word {
+			continue
+		}
+		if i > 0 && isShellWordByte(s[i-1]) {
+			continue
+		}
+		if end := i + len(word); end < len(s) && isShellWordByte(s[end]) {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
 // issueStepProblems returns every way a scheduled findings issue step
 // breaks its create-or-comment contract: the step must carry the
 // failure() plus schedule gate (fork-PR safety), and its body must look
@@ -50,39 +69,32 @@ func issueStepProblems(run string, issue workflowStep) []string {
 		problems = append(problems, "findings issue step body lacks gh issue create (weekly runs would duplicate issues)")
 	}
 	if listIdx >= 0 && commentIdx >= 0 && createIdx >= 0 {
-		// Require ordered shell-branch tokens, not word co-occurrence:
-		// a branchless body can mention the words "if" and "else"
-		// without branching. The list lookup must precede the branch.
-		ifPos := strings.Index(run, "if ")
-		thenPos, elsePos := -1, -1
+		// Require ordered shell-branch tokens, not word co-occurrence,
+		// with the comment/create arms pinned inside the branch: a
+		// branchless body can carry the tokens anywhere (including a
+		// trailing echo or comment) without branching. The list lookup
+		// must precede the branch.
+		ifPos := indexShellWord(run, "if", 0)
+		thenPos, elsePos, fiPos := -1, -1, -1
 		if ifPos >= 0 {
-			if i := strings.Index(run[ifPos+len("if "):], "then"); i >= 0 {
-				thenPos = ifPos + len("if ") + i
-				if j := strings.Index(run[thenPos+len("then"):], "else"); j >= 0 {
-					elsePos = thenPos + len("then") + j
+			thenPos = indexShellWord(run, "then", ifPos+len("if"))
+			if thenPos >= 0 {
+				elsePos = indexShellWord(run, "else", thenPos+len("then"))
+				if elsePos >= 0 {
+					if fi := indexShellWord(run, "fi", elsePos+len("else")); fi >= 0 {
+						fiPos = fi
+					}
 				}
 			}
 		}
-		closed := false
-		if elsePos >= 0 {
-			rest := run[elsePos+len("else"):]
-			for j := 0; j+2 <= len(rest); j++ {
-				if rest[j:j+2] != "fi" {
-					continue
-				}
-				prevOK := j == 0 || !isShellWordByte(rest[j-1])
-				nextOK := j+2 >= len(rest) || !isShellWordByte(rest[j+2])
-				if prevOK && nextOK {
-					closed = true
-					break
-				}
-			}
-		}
+		listFirst := listIdx < ifPos
+		commentInside := thenPos < commentIdx && commentIdx < fiPos+len("fi")
+		createInside := thenPos < createIdx && createIdx < fiPos+len("fi")
 		switch {
-		case ifPos < 0 || thenPos < 0 || elsePos < 0 || !closed:
+		case ifPos < 0 || thenPos < 0 || elsePos < 0 || fiPos < 0:
 			problems = append(problems, "findings issue step body has no if/then/else/fi branch: a decoy naming the commands passes without branching")
-		case listIdx >= ifPos || listIdx >= commentIdx || listIdx >= createIdx:
-			problems = append(problems, "findings issue step body lists no open issue before the branch arms")
+		case !listFirst || !commentInside || !createInside:
+			problems = append(problems, "findings issue step body does not run its arms inside the branch: unconditional arms duplicate issues weekly")
 		}
 	}
 	return problems
@@ -140,5 +152,11 @@ func TestScheduledIssueStepsCreateOrComment(t *testing.T) {
 	wordRun := `echo "if open else create (audited, no action)"; gh issue list a; gh issue comment b; gh issue create c`
 	if len(issueStepProblems(wordRun, issue)) == 0 {
 		t.Errorf("word echo: the gate accepted branchless if/else words")
+	}
+	// Trailing echo: carries every branch token after unconditional arms,
+	// so ordered co-occurrence alone still duplicates issues weekly.
+	trailingRun := `gh issue list a; gh issue comment b; gh issue create c; echo "if x then y else z fi"`
+	if len(issueStepProblems(trailingRun, issue)) == 0 {
+		t.Errorf("trailing echo: the gate accepted branch tokens outside the arms")
 	}
 }
