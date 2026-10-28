@@ -5,6 +5,7 @@ package tempo
 
 import (
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -72,8 +73,10 @@ func TestQueryRangeBoundsLiveWindow(t *testing.T) {
 	}
 	end := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	got := queryRange(end, -time.Minute)
-	if got.Get("start") == "" || got.Get("end") == "" {
-		t.Fatalf("queryRange(negative lookback) = %v, want a defaulted window", got)
+	wantStart := strconv.FormatInt(end.Add(-defaultLookback).Unix(), 10)
+	wantEnd := strconv.FormatInt(end.Unix(), 10)
+	if got.Get("start") != wantStart || got.Get("end") != wantEnd {
+		t.Fatalf("queryRange(negative lookback) = %v, want start=%s end=%s (default %v fallback)", got, wantStart, wantEnd, defaultLookback)
 	}
 }
 
@@ -98,6 +101,15 @@ func TestNormalizedLimitsClampToBounds(t *testing.T) {
 
 	if got := normalizedResourceLimit(maxResourceLimit + 1); got != maxResourceLimit {
 		t.Fatalf("normalizedResourceLimit(over max) = %d, want %d", got, maxResourceLimit)
+	}
+	if got := normalizedResourceLimit(0); got != defaultResourceLimit {
+		t.Fatalf("normalizedResourceLimit(0) = %d, want default %d", got, defaultResourceLimit)
+	}
+	if got := normalizedResourceLimit(-1); got != defaultResourceLimit {
+		t.Fatalf("normalizedResourceLimit(-1) = %d, want default %d", got, defaultResourceLimit)
+	}
+	if got := normalizedResourceLimit(42); got != 42 {
+		t.Fatalf("normalizedResourceLimit(42) = %d, want in-range passthrough 42", got)
 	}
 	if got := normalizedTagValueLimit(0); got != defaultTagValueLimit {
 		t.Fatalf("normalizedTagValueLimit(0) = %d, want default %d", got, defaultTagValueLimit)

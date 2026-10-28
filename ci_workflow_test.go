@@ -386,14 +386,41 @@ func TestGosecIssueStepIsReachable(t *testing.T) {
 // open — otherwise every weekly run files a duplicate issue.
 func issueStepProblems(run string, issue workflowStep) []string {
 	var problems []string
-	for _, want := range []string{"failure()", "schedule"} {
-		if !strings.Contains(issue.If, want) {
-			problems = append(problems, "findings issue step if lacks "+want)
-		}
+	if !strings.Contains(issue.If, "failure()") {
+		problems = append(problems, "findings issue step if lacks failure()")
 	}
-	for _, want := range []string{"gh issue list", "gh issue comment", "gh issue create"} {
-		if !strings.Contains(run, want) {
-			problems = append(problems, "findings issue step body lacks "+want+" (weekly runs would duplicate issues)")
+	// Anchor the schedule polarity: a bare "schedule" substring also
+	// matches an inverted != gate that runs on every PR instead of only
+	// on the weekly schedule.
+	if !strings.Contains(issue.If, "== 'schedule'") {
+		problems = append(problems, "findings issue step if lacks == 'schedule' polarity")
+	}
+	if strings.Contains(issue.If, "!=") {
+		problems = append(problems, "findings issue step if carries !=: an inverted gate fires on PRs, not on schedule")
+	}
+	// Require the branch structure, not co-occurrence: the list lookup
+	// must precede the comment/create arms inside an if/else, otherwise
+	// an echo-decoy body naming the commands passes without branching.
+	listIdx := strings.Index(run, "gh issue list")
+	commentIdx := strings.Index(run, "gh issue comment")
+	createIdx := strings.Index(run, "gh issue create")
+	if listIdx < 0 {
+		problems = append(problems, "findings issue step body lacks gh issue list (weekly runs would duplicate issues)")
+	}
+	if commentIdx < 0 {
+		problems = append(problems, "findings issue step body lacks gh issue comment (weekly runs would duplicate issues)")
+	}
+	if createIdx < 0 {
+		problems = append(problems, "findings issue step body lacks gh issue create (weekly runs would duplicate issues)")
+	}
+	if listIdx >= 0 && commentIdx >= 0 && createIdx >= 0 {
+		branched := strings.Contains(run, "if ") && strings.Contains(run, "else")
+		ordered := listIdx < commentIdx && listIdx < createIdx
+		switch {
+		case !branched:
+			problems = append(problems, "findings issue step body has no if/else branch: a decoy naming the commands passes without branching")
+		case !ordered:
+			problems = append(problems, "findings issue step body lists no open issue before the comment/create arms")
 		}
 	}
 	return problems
@@ -433,6 +460,18 @@ func TestScheduledIssueStepsCreateOrComment(t *testing.T) {
 	ungatedRun := `open=$(gh issue list --state open); if [ -n "$open" ]; then gh issue comment "$open"; else gh issue create; fi`
 	if len(issueStepProblems(ungatedRun, ungated)) == 0 {
 		t.Errorf("ungated issue step: the gate accepted a step without failure()/schedule")
+	}
+	// Inverted gate: matches a bare "schedule" substring but fires on
+	// every PR instead of only on the weekly schedule.
+	inverted := workflowStep{If: "failure() && github.event_name != 'schedule'"}
+	if len(issueStepProblems(ungatedRun, inverted)) == 0 {
+		t.Errorf("inverted gate: the gate accepted failure() && event != schedule")
+	}
+	// Echo decoy: names every command but branches on nothing, so the
+	// unconditional create files a duplicate issue every scheduled run.
+	decoyRun := `echo "gh issue list gh issue comment (audited, no action)"; gh issue create --title "$title" --body "$body"`
+	if len(issueStepProblems(decoyRun, issue)) == 0 {
+		t.Errorf("echo decoy: the gate accepted a branchless body that duplicates issues weekly")
 	}
 }
 

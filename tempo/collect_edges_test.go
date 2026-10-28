@@ -132,4 +132,9 @@ func TestMetricsFallBackToDiscard(t *testing.T) {
 	if got := source.metrics(); got == nil {
 		t.Fatal("metrics() = nil, want the discard recorder")
 	}
+	stub := &recordingMetrics{}
+	(&ClaimedSource{recorder: stub}).recordFacts(TargetConfig{}, nil)
+	if stub.facts != nil {
+		t.Fatalf("recordFacts(empty batch) recorded %v, want nothing recorded", stub.facts)
+	}
 }
