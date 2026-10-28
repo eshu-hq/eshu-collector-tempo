@@ -1,0 +1,13 @@
+# The image build needs go.mod, go.sum, the Go sources, and manifest.yaml (it
+# is go:embed'ed). Everything else stays out of the build context so the
+# context is small and a change to a fixture or a doc cannot change the image.
+.git
+.github
+.gitignore
+.dockerignore
+LICENSE
+*.md
+testdata
+**/testdata
+*_test.go
+config.example.yaml

@@ -271,3 +271,6 @@ go test -race -count=1 ./...
 `go test -count=1 -run TestImportBoundaryRejectsCoreAndCrossCollectorImports .`
 is the standalone gate: no Eshu internal imports and no cross-collector
 imports beyond the published SDK modules.
+
+`make ci` runs the lint, test, and race lanes CI runs
+(`.github/workflows/ci.yml`; the `ci-complete` job aggregates the others).
