@@ -451,7 +451,7 @@ func issueStepProblems(run string, issue workflowStep) []string {
 		switch {
 		case ifPos < 0 || thenPos < 0 || elsePos < 0 || !closed:
 			problems = append(problems, "findings issue step body has no if/then/else/fi branch: a decoy naming the commands passes without branching")
-		case !(listIdx < ifPos && listIdx < commentIdx && listIdx < createIdx):
+		case listIdx >= ifPos || listIdx >= commentIdx || listIdx >= createIdx:
 			problems = append(problems, "findings issue step body lists no open issue before the branch arms")
 		}
 	}
