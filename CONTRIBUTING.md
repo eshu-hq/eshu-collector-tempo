@@ -25,16 +25,22 @@ the actionlint lane.
 
 ## CI lanes
 
-`.github/workflows/ci.yml` runs a `changes` job first, so a PR only pays
-for lanes its paths can affect: Go sources run `lint`, `test`, `race`,
-`image` (the Dockerfile builds the binary from them), `boundary`,
-and `gosec`; fixtures and embedded config run `test`;
-`Dockerfile` and manifest changes run `image`; dependency changes run
-`govulncheck`; workflow changes run `actionlint` plus the Go lanes.
-`ci-complete` is the only required check: it fails when a needed lane
-fails and passes when lanes were legitimately skipped (docs-only PRs).
+`.github/workflows/ci.yml` is a thin caller over the shared
+`go-collector-ci` reusable (pinned by SHA): it runs a `changes` job
+first, so a PR only pays for lanes its paths can affect, then calls
+`go-ci` with this repo's run-gate wiring. Go sources select `lint`,
+`test`, `race`, `image` (the Dockerfile builds the binary from them),
+`boundary`, and `gosec`; fixtures and embedded config select `test`;
+`Dockerfile` and manifest changes select `image`; dependency changes
+select `govulncheck`; workflow changes select `actionlint` plus the Go
+lanes. Check runs nest as `go-ci / <lane>`, so `go-ci / ci-complete`
+is the only required check: it fails when a needed lane fails and
+passes when lanes were legitimately skipped (docs-only PRs).
 
-Weekly, `govulncheck` and `gosec` (SARIF to the Security tab, advisory
-until its false-positive rate is measured) run on a schedule and file an
-issue on findings. Dependabot proposes weekly grouped `gomod` and
-`github-actions` bumps.
+The two jobs the reusable cannot own stay in the caller:
+`scheduled-findings` files a single weekly issue when the scheduled
+`govulncheck`/`gosec` lanes fail, and `gosec-sarif` uploads SARIF to
+the Security tab (advisory until its false-positive rate is measured).
+`scripts/tempo-seed-matrix.sh` reseeds only the locally provable lanes;
+the upstream lane bodies are proven by the reusable's own selftest.
+Dependabot proposes weekly grouped `gomod` and `github-actions` bumps.

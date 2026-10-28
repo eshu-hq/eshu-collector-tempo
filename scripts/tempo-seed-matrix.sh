@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Seeded RED/GREEN matrix for the CI lanes (epic #6 acceptance).
+# Seeded RED/GREEN matrix for the locally provable CI lanes (epic #6 acceptance).
 #
 # Local runner, not a CI gate: it seeds a defect, asserts the named lane
 # turns red, removes the seed, and asserts the lane turns green again.
 # It never compares the tree against a committed count or list.
+#
+# 14 checks: vet, lint, format, race, tidy, the 500-line cap, and the
+# coverage floor (RED + GREEN each). The lane bodies that moved upstream
+# into the eshu-hq/.github go-collector-ci reusable (the ci-complete
+# aggregation, the govulncheck/gosec reachability proofs) are proven by
+# that repo's own selftest, not reseeded here.
 #
 # Usage: bash scripts/tempo-seed-matrix.sh
 # Must leave the tree clean: every seed is removed after its check.
@@ -26,7 +32,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Refuse only on leftover seeds from an earlier run; the lane's own
-# uncommitted diff (this script, the ci.yml reseed note) is expected.
+# uncommitted diff (this script, the caller-shape test edits) is expected.
 # The end-of-run check diffs the tree against this snapshot instead.
 if ls zz_seed_* >/dev/null 2>&1; then
 	echo "FAIL: leftover seed files present; refusing to seed"
@@ -154,13 +160,12 @@ else
 fi
 
 # --- 500-line cap: seeded over-cap file trips the wc -l step ---
-# Derive the threshold live from the lane the way the floor section derives
-# COVERAGE_FLOOR, so a lane edit propagates to the matrix instead of being
-# silently shadowed by a hardcoded copy.
-# shellcheck disable=SC2016 # $f/$n are literal grep text (fixed-string match), not expansions.
-cap=$(grep -F 'echo "$f: $n lines"' .github/workflows/ci.yml | sed -n 's/.*-gt \([0-9][0-9]*\).*/\1/p')
+# Derive the threshold live from the Makefile loop the same way the floor
+# section derives COVERAGE_FLOOR, so a lane edit propagates to the matrix
+# instead of being silently shadowed by a hardcoded copy.
+cap=$(sed -n 's/.*-gt \([0-9][0-9]*\).*/\1/p' Makefile | head -n 1)
 if [ -z "$cap" ] || [ "$(printf '%s\n' "$cap" | wc -l)" -ne 1 ]; then
-	echo "FAIL: cap RED (no single live threshold in ci.yml)" | tee -a "$LOG"
+	echo "FAIL: cap RED (no single live threshold in Makefile)" | tee -a "$LOG"
 	fail=$((fail + 1))
 else
 {
@@ -203,9 +208,11 @@ if awk -v t="$total" -v f="99" 'BEGIN { if (t + 0 < f + 0) { exit 1 } }'; then
 else
 	ok "floor RED at 99 (measured $total)"
 fi
-floor=$(sed -n 's/.*COVERAGE_FLOOR: "\([0-9.]*\)".*/\1/p' .github/workflows/ci.yml | head -n 1)
+# The floor is the Makefile value (overridable from the environment via
+# COVERAGE_FLOOR): the same number the caller passes as coverage-floor.
+floor=${COVERAGE_FLOOR:-$(sed -n 's/^COVERAGE_FLOOR ?= \([0-9.]*\).*/\1/p' Makefile | head -n 1)}
 if [ -z "$floor" ]; then
-	echo "FAIL: floor GREEN (no COVERAGE_FLOOR in live ci.yml)" | tee -a "$LOG"
+	echo "FAIL: floor GREEN (no COVERAGE_FLOOR in Makefile)" | tee -a "$LOG"
 	fail=$((fail + 1))
 elif awk -v t="$total" -v f="$floor" 'BEGIN { if (t + 0 < f + 0) { print "FAIL: coverage below floor"; exit 1 } }'; then
 	ok "floor GREEN at $floor (measured $total)"
@@ -213,40 +220,9 @@ else
 	bad "floor GREEN at $floor (measured $total)"
 fi
 
-# --- ci-complete: the live aggregator fails failed/cancelled, passes skips ---
-AGG="$TMP/aggregate.py"
-awk '/python3 - <<.EOF./ { flag=1; next } /^[[:space:]]*EOF$/ { if (flag) { flag=0; exit } } flag { sub(/^          /, ""); print }' \
-	.github/workflows/ci.yml >"$AGG"
-if [ ! -s "$AGG" ]; then
-	echo "FAIL: ci-complete seeds (aggregator not found in live ci.yml)" | tee -a "$LOG"
-	fail=$((fail + 3))
-else
-	red_failed='{"changes":{"result":"success"},"lint":{"result":"failure"},"test":{"result":"success"},"race":{"result":"skipped"},"shell":{"result":"skipped"},"image":{"result":"skipped"},"boundary":{"result":"success"},"govulncheck":{"result":"skipped"},"gosec":{"result":"skipped"},"actionlint":{"result":"success"}}'
-	if NEEDS_JSON="$red_failed" python3 "$AGG" >"$LOG" 2>&1; then
-		bad "ci-complete RED on failed lane (aggregator stayed green)"
-	else
-		ok "ci-complete RED on failed lane"
-	fi
-	red_cancelled='{"changes":{"result":"success"},"lint":{"result":"cancelled"},"test":{"result":"success"},"race":{"result":"skipped"},"shell":{"result":"skipped"},"image":{"result":"skipped"},"boundary":{"result":"success"},"govulncheck":{"result":"skipped"},"gosec":{"result":"skipped"},"actionlint":{"result":"success"}}'
-	if NEEDS_JSON="$red_cancelled" python3 "$AGG" >"$LOG" 2>&1; then
-		bad "ci-complete RED on cancelled lane (aggregator stayed green)"
-	else
-		ok "ci-complete RED on cancelled lane"
-	fi
-	green_skips='{"changes":{"result":"success"},"lint":{"result":"success"},"test":{"result":"success"},"race":{"result":"skipped"},"shell":{"result":"skipped"},"image":{"result":"skipped"},"boundary":{"result":"success"},"govulncheck":{"result":"skipped"},"gosec":{"result":"success"},"actionlint":{"result":"success"}}'
-	if NEEDS_JSON="$green_skips" python3 "$AGG" >"$LOG" 2>&1; then
-		ok "ci-complete GREEN with skips"
-	else
-		bad "ci-complete GREEN with skips"
-	fi
-fi
-
-# --- reachability: aggregator and issue-step contract tests on live ci.yml ---
-if go test -count=1 -run 'TestCICompleteAggregatesPerJobResults|TestGovulncheckIssueStepIsReachable|TestGosecIssueStepIsReachable' . >"$LOG" 2>&1; then
-	ok "reachability tests GREEN on live ci.yml"
-else
-	bad "reachability tests GREEN on live ci.yml"
-fi
+# Lane bodies now live upstream: the ci-complete aggregation and the
+# govulncheck/gosec issue-step reachability are proven by the reusable's
+# own selftest, not reseeded here.
 
 echo "seed matrix: pass=$pass fail=$fail"
 if ! diff -u "$SNAPSHOT" <(git status --porcelain) >"$TMP/status-diff.txt" 2>&1; then
