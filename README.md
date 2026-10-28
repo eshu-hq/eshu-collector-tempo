@@ -274,3 +274,6 @@ imports beyond the published SDK modules.
 
 `make ci` runs the lint, test, and race lanes CI runs
 (`.github/workflows/ci.yml`; the `ci-complete` job aggregates the others).
+
+Fork PRs run the same lanes on the automatic read-only token: secret-requiring
+steps (SARIF upload, findings issues) are skipped or schedule-gated.
