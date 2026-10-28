@@ -384,6 +384,12 @@ func TestGosecIssueStepIsReachable(t *testing.T) {
 // up the open findings issue first (gh issue list) and comment on it
 // (gh issue comment), creating (gh issue create) only when none is
 // open — otherwise every weekly run files a duplicate issue.
+// isShellWordByte reports whether b can sit inside a shell word, so the
+// branch-token scan does not match "fi" inside "if" or any other word.
+func isShellWordByte(b byte) bool {
+	return b == '_' || '0' <= b && b <= '9' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
+}
+
 func issueStepProblems(run string, issue workflowStep) []string {
 	var problems []string
 	if !strings.Contains(issue.If, "failure()") {
@@ -414,13 +420,39 @@ func issueStepProblems(run string, issue workflowStep) []string {
 		problems = append(problems, "findings issue step body lacks gh issue create (weekly runs would duplicate issues)")
 	}
 	if listIdx >= 0 && commentIdx >= 0 && createIdx >= 0 {
-		branched := strings.Contains(run, "if ") && strings.Contains(run, "else")
-		ordered := listIdx < commentIdx && listIdx < createIdx
+		// Require ordered shell-branch tokens, not word co-occurrence:
+		// a branchless body can mention the words "if" and "else"
+		// without branching. The list lookup must precede the branch.
+		ifPos := strings.Index(run, "if ")
+		thenPos, elsePos := -1, -1
+		if ifPos >= 0 {
+			if i := strings.Index(run[ifPos+len("if "):], "then"); i >= 0 {
+				thenPos = ifPos + len("if ") + i
+				if j := strings.Index(run[thenPos+len("then"):], "else"); j >= 0 {
+					elsePos = thenPos + len("then") + j
+				}
+			}
+		}
+		closed := false
+		if elsePos >= 0 {
+			rest := run[elsePos+len("else"):]
+			for j := 0; j+2 <= len(rest); j++ {
+				if rest[j:j+2] != "fi" {
+					continue
+				}
+				prevOK := j == 0 || !isShellWordByte(rest[j-1])
+				nextOK := j+2 >= len(rest) || !isShellWordByte(rest[j+2])
+				if prevOK && nextOK {
+					closed = true
+					break
+				}
+			}
+		}
 		switch {
-		case !branched:
-			problems = append(problems, "findings issue step body has no if/else branch: a decoy naming the commands passes without branching")
-		case !ordered:
-			problems = append(problems, "findings issue step body lists no open issue before the comment/create arms")
+		case ifPos < 0 || thenPos < 0 || elsePos < 0 || !closed:
+			problems = append(problems, "findings issue step body has no if/then/else/fi branch: a decoy naming the commands passes without branching")
+		case !(listIdx < ifPos && listIdx < commentIdx && listIdx < createIdx):
+			problems = append(problems, "findings issue step body lists no open issue before the branch arms")
 		}
 	}
 	return problems
@@ -472,6 +504,12 @@ func TestScheduledIssueStepsCreateOrComment(t *testing.T) {
 	decoyRun := `echo "gh issue list gh issue comment (audited, no action)"; gh issue create --title "$title" --body "$body"`
 	if len(issueStepProblems(decoyRun, issue)) == 0 {
 		t.Errorf("echo decoy: the gate accepted a branchless body that duplicates issues weekly")
+	}
+	// Word echo: mentions if/else without any branch tokens that form a
+	// statement, so the unconditional arms still duplicate issues weekly.
+	wordRun := `echo "if open else create (audited, no action)"; gh issue list a; gh issue comment b; gh issue create c`
+	if len(issueStepProblems(wordRun, issue)) == 0 {
+		t.Errorf("word echo: the gate accepted branchless if/else words")
 	}
 }
 
