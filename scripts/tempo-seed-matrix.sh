@@ -157,6 +157,7 @@ fi
 # Derive the threshold live from the lane the way the floor section derives
 # COVERAGE_FLOOR, so a lane edit propagates to the matrix instead of being
 # silently shadowed by a hardcoded copy.
+# shellcheck disable=SC2016 # $f/$n are literal grep text (fixed-string match), not expansions.
 cap=$(grep -F 'echo "$f: $n lines"' .github/workflows/ci.yml | sed -n 's/.*-gt \([0-9][0-9]*\).*/\1/p')
 if [ -z "$cap" ] || [ "$(printf '%s\n' "$cap" | wc -l)" -ne 1 ]; then
 	echo "FAIL: cap RED (no single live threshold in ci.yml)" | tee -a "$LOG"
