@@ -114,6 +114,17 @@ func TestParseRequestRequiresClaimLiveness(t *testing.T) {
 	}
 }
 
+// TestParseRequestLabelsMalformedJSON proves a syntactically broken document
+// fails with the friendly malformed reason instead of a raw decoder error.
+func TestParseRequestLabelsMalformedJSON(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseRequest(stringReader("not json"))
+	if err == nil || !strings.Contains(err.Error(), "malformed JSON") {
+		t.Fatalf("ParseRequest() error = %v, want a malformed-JSON failure", err)
+	}
+}
+
 // TestParseRequestNamesTypeErrors proves a mistyped field names the field
 // while an unknown field falls back to the decoder message.
 func TestParseRequestNamesTypeErrors(t *testing.T) {
