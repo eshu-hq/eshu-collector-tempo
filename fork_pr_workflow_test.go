@@ -82,6 +82,12 @@ func TestCIWorkflowForkPRSafe(t *testing.T) {
 		"issue steps run on PRs": func(s string) string {
 			return strings.ReplaceAll(s, "if: failure() && github.event_name == 'schedule'", "if: always()")
 		},
+		"SARIF upload tautology runs on PRs": func(s string) string {
+			return strings.Replace(s, "if: github.event_name != 'pull_request'\n        uses: github/codeql-action/upload-sarif", "if: github.event_name != 'pull_request' || true\n        uses: github/codeql-action/upload-sarif", 1)
+		},
+		"issue step tautology runs on PRs": func(s string) string {
+			return strings.Replace(s, "if: failure() && github.event_name == 'schedule'", "if: failure() || github.event_name == 'schedule' || true", 1)
+		},
 		"job grants actions write": func(s string) string {
 			return strings.Replace(s, "security-events: write", "security-events: write\n      actions: write", 1)
 		},
