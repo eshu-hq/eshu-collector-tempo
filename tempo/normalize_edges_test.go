@@ -117,4 +117,7 @@ func TestNormalizedLimitsClampToBounds(t *testing.T) {
 	if got := normalizedTagValueLimit(maxTagValueLimit + 1); got != maxTagValueLimit {
 		t.Fatalf("normalizedTagValueLimit(over max) = %d, want %d", got, maxTagValueLimit)
 	}
+	if got := normalizedTagValueLimit(42); got != 42 {
+		t.Fatalf("normalizedTagValueLimit(42) = %d, want in-range passthrough 42", got)
+	}
 }
