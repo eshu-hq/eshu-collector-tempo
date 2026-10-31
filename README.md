@@ -50,12 +50,12 @@ GOPROXY=proxy.golang.org go list -m github.com/eshu-hq/eshu-sdk/factschema@v0.1.
   kinds (`observability.source_instance`,
   `observability.observed_trace_signal`, `observability.coverage_warning`)
   at `1.0.0` reported.
-- `Dockerfile` — the static release image the tag-gated workflow publishes.
+- `Dockerfile` — the static release image the release workflow publishes.
 - `config.example.yaml` — a starting activation config (placeholders, no
   secrets).
 - `.github/workflows/` — `ci.yml` (vet, tests with `-race`, import
-  boundary, image seed contract) and `release.yml` (tag-gated image
-  publish with signature and attestations).
+  boundary, image seed contract) and `release.yml` (image publish on
+  `main` pushes and version tags, with signature and attestations).
 
 ## Parity evidence
 
@@ -151,8 +151,9 @@ This repository mirrors that layout file for file (`doc.go`, `types.go`,
 - Token is optional (unauthenticated Tempo is a supported target); Loki
   and Grafana treatments of their own credentials are unchanged.
 - Standalone surface added for the QA cutover (#9172): `cmd/collector/`,
-  `Dockerfile`, `manifest.yaml`, and the tag-gated `release.yml`, following
-  the same shape as the Grafana, Loki, and security-alerts satellites. No
+  `Dockerfile`, `manifest.yaml`, and the `release.yml` image-publish
+  workflow, following the same shape as the Grafana, Loki, and
+  security-alerts satellites, plus moving tags on `main` pushes. No
   chart: deployment stays GitOps-owned in `boatsgroup/iac-eks-eshu`.
 
 ## Running
@@ -237,14 +238,19 @@ target is pending (NOT_CHECKED).
 
 ## Releasing
 
-`.github/workflows/release.yml` runs only when a tag `vMAJOR.MINOR.PATCH[-pre]`
-is pushed. Nothing runs on a pull request or a branch push, and the workflow
-deploys nothing.
+`.github/workflows/release.yml` runs on every push to `main` and on every
+pushed tag `vMAJOR.MINOR.PATCH[-pre]`. Nothing runs on a pull request, and
+the workflow deploys nothing.
 
-The workflow refuses to publish unless the tag points at the protected
-`main` head, so a `v*` tag cut from any other commit publishes nothing. As
-defense in depth, restrict who can create `v*` tags with a tag ruleset
-limited to maintainers.
+A push to `main` publishes the moving `main`, `latest`, and
+`sha-<full-sha>` tags with the same signature and attestation hardening as a
+version release. Use a moving tag only where floating is intended; releases
+stay pinned to digests.
+
+The workflow refuses to publish a version release unless the tag points at
+the protected `main` head, so a `v*` tag cut from any other commit publishes
+nothing. As defense in depth, restrict who can create `v*` tags with a tag
+ruleset limited to maintainers.
 
 1. Set `metadata.version` in `manifest.yaml` to the version you are releasing
    and merge that change to `main`. Then tag the merge commit and push the tag.
@@ -252,7 +258,8 @@ limited to maintainers.
    (a `-pre-release` suffix on the tag is allowed when the manifest version has
    none), and it checks this before it builds or pushes anything.
 2. The workflow builds `linux/amd64` (the only platform the manifest declares),
-   pushes `ghcr.io/eshu-hq/eshu-collector-tempo:<tag>`, writes the
+   pushes `ghcr.io/eshu-hq/eshu-collector-tempo:<tag>` (or `:main`,
+   `:latest`, and `:sha-<full-sha>` for a `main` push), writes the
    digest to the job summary, signs the digest with cosign (keyless), and
    attaches a SLSA build-provenance attestation and an SPDX SBOM attestation.
    It needs no secret beyond the job's `GITHUB_TOKEN`.
