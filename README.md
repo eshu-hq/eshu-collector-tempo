@@ -1,283 +1,187 @@
 # eshu-collector-tempo
 
-Extracted Tempo trace-signal collector producer for [eshu-hq/eshu#8867](https://github.com/eshu-hq/eshu/issues/8867)
-(collector-tempo extraction, part of epic #6707). Emission half only:
-this repository fetches bounded live Tempo metadata and returns a
-`collector-sdk/v1alpha1` Result per host claim. Core keeps admission,
-projection, persistence, claim mutation, fencing, and the status read.
+Status: pre-release. This collector is not yet the live Tempo producer for Eshu; Eshu core still owns admission and storage.
 
-Refs #8867. This repository does not close that issue: cutover stays gated
-by #4047 with production acceptance NOT_CHECKED, and no pair is a
-qualified consumer/core combination yet (see SDK Compatibility in
-eshu-hq/eshu docs).
+This collector reads live Tempo trace metadata for Eshu and returns it as facts (small, checked records Eshu stores as evidence).
 
-## Pins
+## What it collects
 
-Exact published pins from `eshu-hq/eshu-sdk` — never `@latest`, no
-`replace` or workspace directives:
+For each work request, the collector reads one configured Tempo target through bounded REST calls and emits metadata only. It never stores spans or trace payloads.
 
-| Module | Pin |
-|---|---|
-| `github.com/eshu-hq/eshu-sdk/collector` | `v0.1.0-rc.3` |
-| `github.com/eshu-hq/eshu-sdk/factschema` | `v0.1.0-rc.5` |
+`manifest.yaml` declares 3 fact kinds. Each kind uses schema version `1.0.0` and source confidence `reported` (the provider itself reported the value).
 
-Verify resolution before any pin bump:
+| Fact kind | What it records | Tempo read behind it |
+| --- | --- | --- |
+| `observability.source_instance` | One configured Tempo target | The configured target itself |
+| `observability.observed_trace_signal` | Tag names, tag values, and freshness seen live | `GET /api/v2/search/tags`, `GET /api/v2/search/tag/{tag}/values`, optional `GET /api/echo` |
+| `observability.coverage_warning` | A gap: permission-hidden, unsupported, throttled, or partial data | Any read above that could not finish cleanly |
 
-```bash
-GOPROXY=proxy.golang.org go list -m github.com/eshu-hq/eshu-sdk/collector@v0.1.0-rc.3
-GOPROXY=proxy.golang.org go list -m github.com/eshu-hq/eshu-sdk/factschema@v0.1.0-rc.5
+Spans, trace retrieval payloads, raw trace IDs, TraceQL bodies, tag values in the clear, tenant IDs, credentials, and provider response bodies never enter a fact. Tag values are fingerprinted or flagged instead. There is no rules read and no truncation kind; a partial read is the only degraded shape.
+
+The `/api/echo` freshness probe runs only when `freshness_probe_enabled` is set for the target. Tag and tag-value reads are the always-on path.
+
+## How data flows
+
+```mermaid
+flowchart LR
+    A[Tempo API] --> B[this collector]
+    B --> C[Eshu extension host]
+    C --> D[Eshu core]
 ```
 
-## Layout
+Text version: Tempo API → this collector → Eshu extension host → Eshu core. The host hands the collector one claim (one bounded unit of work), validates the result, and owns claims, leases (timed work ownership), and commits. Core owns admission, projection, and persistence.
 
-- `tempo/` — the producer: bounded REST fetch (`client.go`,
-  `normalize.go`), three envelope constructors (`envelope.go`),
-  claim-to-Result fan-out (`source.go`), metadata-only redaction
-  (`redaction.go`), kind/schema admission (`schema.go`), claim-ID minting
-  (`claimid.go`), and a host-wired metrics seam (`metrics.go`).
-  `testdata/8867-parity-tempo.json` is the cutover comparison input,
-  byte-identical to the in-tree parity pack.
-- `contract.go`, `request.go`, `config.go`, `handler.go`, `failure.go` —
-  the SDK adapter: the emitted contract, the stdio request wire shape,
-  activation parsing (targets plus the shared host-level limits stanza),
-  and the claim-to-Result handler that maps every outcome to a
-  validator-clean result.
-- `cmd/collector/` — the standalone entrypoint: one claim from stdin by
-  default (`--sdk-stdio`), and `seed` to install the binary and manifest
-  into a component home from an init container.
-- `manifest.yaml` (`manifest_embed.go`) — the component package at version
-  `0.1.3`, with digest-pinned placeholder artifacts and the three emitted
-  kinds (`observability.source_instance`,
-  `observability.observed_trace_signal`, `observability.coverage_warning`)
-  at `1.0.0` reported.
-- `Dockerfile` — the static release image the release workflow publishes.
-- `config.example.yaml` — a starting activation config (placeholders, no
-  secrets).
-- `.github/workflows/` — `ci.yml` (vet, tests with `-race`, import
-  boundary, image seed contract) and `release.yml` (image publish on
-  `main` pushes and version tags, with signature and attestations).
+## When to use it
 
-## Parity evidence
+Use it when Eshu needs live evidence about which trace tags and services a Tempo target actually serves, and whether that data is fresh.
 
-- Census mirror: `tempo/extraction_prep_mirror_test.go` ports the
-  in-tree extraction PREP mirror (admission at 1.0.0, determinism,
-  generation rebind, tag-value hash flow-through, redaction sentinel,
-  fail-closed hostile inputs). `TestClaimIDNamespace` ports the
-  `tempo-claim-` namespace case.
-- Golden vectors: `tempo/extraction_prep_golden_test.go` pins the three
-  in-tree stable keys, the tag-values and source-instance payload bytes
-  cut from the in-tree constructors at the merged prep (eshu-hq/eshu
-  `a91b8dd8`) against the stub-replayed parity run, plus a live
-  httptest run that reproduces the recorded pack's stable keys
-  (permission-hidden degradation stays covered by the in-tree parity
-  test), a per-kind census, and a validator self-check. Regenerate only
-  from the in-tree constructors, never from this package's own output.
-- Stable keys: `kind:generationID:identity.StableID(kind, identity)` is
-  byte-stable with the in-tree scheme (the published
-  `factschema/identity` algorithm is identical to in-tree
-  `facts.StableID`; the golden test proves it empirically).
-- Contract payloads: `observability/v1` struct fields are identical
-  between the in-tree `sdk/go/factschema` source and the pinned module,
-  and the same `EncodeObservability*` entry points merge payloads.
-- SDK self-check: `TestCollectEmitsValidatorCleanResult` and
-  `TestCollectPartialReadStaysPartial` run emitted Results through the
-  published SDK's own `collector.NewValidator(...).ValidateResult`,
-  including its sensitive-payload-key gate.
-- In-tree `FactID` (host-assigned at admission) and numeric
-  `FencingToken` (host-enforced from `claim.fencing_token`) have no
-  emission-half counterpart and are intentionally not ported.
-  `source_ref.uri` carries the target base URL because the SDK Fact wire
-  shape requires it; the in-tree envelope has no URI counterpart.
+Do not use it to fetch traces for people, run TraceQL searches, or replace Tempo itself. It reads tag metadata only and writes nothing to Tempo.
 
-## Boundaries (core-owned, not ported)
+## How Eshu runs it
 
-Instance selection, `token_env`/`tenant_id_env` resolution, the
-heartbeat-under-lease guard, the Postgres commit boundary, cassette
-replay, and `eshu_dp_tempo_*` signals stay in core. The
-`tempo.observe`/`tempo.fetch` spans stay core-traced; the host observes
-the `Collect` call itself. Telemetry records against the local
-`MetricsRecorder` seam; the host adapts it to its own signals.
-`source_system` binding is strict (`tempo` exactly): the SDK host
-validator requires fact source_system to equal the claim's, so anything
-else fails closed at the edge.
+The Eshu component-extension host runs this program with its `process` runner:
 
-Credential transport: the token is OPTIONAL (empty `token_env` means
-unauthenticated Tempo; a named-but-unset variable fails closed at the
-core-owned config layer). Token and tenant travel in the
-`Authorization: Bearer` and `X-Scope-OrgID` headers, never in query
-parameters, facts, logs, metric labels, or docs. TraceQL, tag values,
-and tenant IDs are fingerprint-or-flag redacted before emission.
+- The host writes one bounded `collector-sdk/v1alpha1` Request to standard input (stdin).
+- The collector reads the configured Tempo targets and writes one `collector-sdk/v1alpha1` Result to standard output (stdout).
+- With no arguments, or with `--sdk-stdio`, the binary serves one claim this way. That is the only serving mode.
 
-Failure classification: 403/401 append a `permission_hidden` warning and
-degrade to partial; 404/405 append `unsupported`; 429 appends
-`rate_limited` and returns a retryable provider error; anything else
-returns a terminal provider error. Unknown claim scope IDs fail as
-retryable provider failures. Two in-tree config knobs have no producer
-counterpart: the per-target `Now` clock hook is dropped (test-only
-narrowing; production-identical when nil) and `StaleAfter` is dropped
-from `TargetConfig` (core-config-parsed, producer-unread — correctly
-core-owned).
-
-## Deferred to the host
-
-- Claim acquisition wiring for `newClaimID` (the in-tree
-  `service.go` equivalent).
-- `Lookback` default: the 1h fallback bounds the tag-search window;
-  narrow it only when the deployment's retention window is shorter.
-
-## Open gaps
-
-- P1: the published factschema `v0.1.0-rc.5` has no per-kind
-  schema-version map or `ValidateSchemaVersion` admission helper
-  (compare `ObservabilitySchemaVersion` / `ValidateSchemaVersion` in
-  eshu-hq/eshu `go/internal/facts`). The locked `1.0.0` map lives in
-  `tempo/schema.go` until the SDK gains one.
-
-## Relation to eshu-collector-grafana (#8857) and eshu-collector-loki (#8860)
-
-This repository mirrors that layout file for file (`doc.go`, `types.go`,
-`envelope.go`, `source.go`, `client.go`, `redaction.go`, `metrics.go`,
-`schema.go`, `claimid.go`, CI). Deliberate Tempo deltas:
-
-- `normalize.go`: tag-set/tag-value normalization split out of
-  `client.go` so both files stay under the 500-line cap (same split as
-  the in-tree `http_normalize.go`).
-- `testdata/8867-parity-tempo.json`: the #4047 cutover comparison input
-  travels with the repo (byte-identical to in-tree).
-- No rules path and no truncation concept: three kinds only, and a
-  partial read is the only degraded-completeness shape.
-- Freshness probe (`/api/echo`) runs only when the host enables it; tag
-  and tag-value reads are the always-on path.
-- Token is optional (unauthenticated Tempo is a supported target); Loki
-  and Grafana treatments of their own credentials are unchanged.
-- Standalone surface added for the QA cutover (#9172): `cmd/collector/`,
-  `Dockerfile`, `manifest.yaml`, and the `release.yml` image-publish
-  workflow, following the same shape as the Grafana, Loki, and
-  security-alerts satellites, plus moving tags on `main` pushes. No
-  chart: deployment stays GitOps-owned in `boatsgroup/iac-eks-eshu`.
-
-## Running
-
-The collector runs through the Eshu component-extension host with the
-`process` runner. The host writes one bounded `collector-sdk/v1alpha1`
-request to stdin and reads one result from stdout. The collector gets no
-Postgres, graph, queue, lease, or workflow handle.
+Local smoke run with a recorded request:
 
 ```bash
 go run ./cmd/collector < request.json > result.json
 ```
 
-A bad activation fails closed as terminal `invalid_config` before any
-provider contact; an unconfigured scope fails retryable with no facts. An
-oversized result fails terminal as `result_too_large` when the encoded result
-exceeds `config.limits.maxResultBytes`. A claim arriving with no lease time
-left fails retryable as `claim_deadline_exceeded`. The token stays optional:
-an empty `token_env` means unauthenticated Tempo, while a named-but-unset
-variable fails closed at config parse. The host passes the activation config
-block verbatim, including the shared `limits` stanza and the per-target
-`provider` key; `provider` must be empty or `tempo`, and the satellite
-enforces `limits.maxResultBytes` against its encoded result.
+### Image and seed
 
-The collector writes one JSON diagnostic line per claim to stderr for local
-runs and tests; the host's process runner drops the text. The line carries
-claim identity and the failure vocabulary only: never a token, URL, or
-provider body.
+The release image is `ghcr.io/eshu-hq/eshu-collector-tempo`. It holds one static binary at `/usr/local/bin/collector` on a distroless base (no shell), running as user `65532:65532`.
 
-## Image and seeding
-
-The image holds one static binary that installs itself, so an init container
-needs no shell:
+The binary installs itself for the host. An init container (a setup container that runs before the main one) runs:
 
 ```bash
-collector seed --dest /component [--image-ref ghcr.io/eshu-hq/eshu-collector-tempo@sha256:<digest>]
+collector seed --dest DIR [--image-ref ghcr.io/eshu-hq/eshu-collector-tempo@sha256:DIGEST]
 ```
 
-writes `/component/collector` (mode 0755) and `/component/manifest.yaml`.
-`--image-ref REF` (or the `COLLECTOR_IMAGE_REF` environment variable; the flag
-wins) stamps the deployed digest-pinned reference into the manifest's artifact
-entry, because an image cannot embed its own digest. The repository manifest
-keeps the all-zero placeholder digest permanently (`manifest_test.go` fails on
-a real one), because it is embedded in the binary and a committed digest could
-only describe an older build.
+Seed writes `DIR/collector` (mode 0755) and `DIR/manifest.yaml` (mode 0644). Re-running it is safe; files are replaced atomically.
 
-## Cutover identity
+`--image-ref`, or the `COLLECTOR_IMAGE_REF` environment variable (the flag wins), stamps the deployed digest into the seeded manifest, because an image cannot embed its own digest. One trailing newline is trimmed; any other shape exits non-zero before any file is written and never echoes the value. Without it, the repo placeholder (all-zero digest in `manifest.yaml`) is written unchanged — tests fail if a real digest is ever committed there.
 
-Replacing the in-tree Tempo collector with this one must not re-key a single
-fact. These activation values have to equal what the in-tree collector uses
-for the same feed:
+Manifest identity: `dev.eshu.collector.tempo`, version `0.1.3`, collector kind `tempo`, platform `linux/amd64`, compatible core `>=0.0.5 <0.2.0`.
 
-| Activation value | Must equal the in-tree value | If it differs |
-| --- | --- | --- |
-| `host.scope.id` | the in-tree target's `scope_id` | every stable key changes: the feed is ingested as a new scope |
-| `host.scope.kind` | `trace_source` | the scope no longer matches the in-tree scope kind |
-| `host.sourceSystem` | the in-tree source system, `tempo` | `source_ref` changes on every fact |
-| activation instance id | the in-tree collector instance id | `collector_instance_id` in payloads changes |
+### Authorization
 
-The collector copies `scope_id`, `collector_instance_id`, and `source_system`
-from the claim the host sends; it has no setting of its own for them.
+All 3 kinds are core-owned, so the host refuses them without a live producer grant (permission to emit a core-owned kind). Authorization is host-enforced at emission: grants arrive at the activation level, and this collector carries no grant material. There is no `grant.example.json` in this repo, and `config.grant` is rejected as an unknown field. The collect path performs no grant check of its own.
 
-Before enabling an activation, read the values from the live in-tree
-collector instance configuration and write them into the activation. Do not
-copy the placeholders in `config.example.yaml`. Run only one of the two
-collectors per feed: with the same scope and instance id they would write the
-same stable keys.
+### Stable identity when replacing an older collector
 
-## Authorization
+Scope and instance IDs are part of every stable fact key. If this activation replaces an existing Tempo feed, copy these values from that feed's live configuration instead of inventing new ones, or Eshu will ingest the same feed as a new scope:
 
-The emitted kinds are core-owned, so the host refuses them without a live
-producer grant. Authorization stays host-enforced at emission: the activation
-carries `grants` at the activation level (issued again on every pod start by
-the reconcile init containers), and the satellite carries no grant material.
-`config.grant` is rejected as an unknown field, and the collect path performs
-no grant check.
+| Activation value | Must match the existing feed |
+| --- | --- |
+| `host.scope.id` | The existing target's `scope_id` |
+| `host.scope.kind` | `trace_source` |
+| `host.sourceSystem` | `tempo` |
+| Activation instance ID | The existing collector instance ID |
 
-The manifest declares the full three-kind emission set at `1.0.0`
-reported, and the grant keeps all three covered kinds: the host classifies
-emission by grant, not by manifest. Live QA re-proof against a real Tempo
-target is pending (NOT_CHECKED).
+Run only one collector per feed with the same scope and instance ID. Do not copy the placeholders in `config.example.yaml`.
 
-## Releasing
+## Configuration
 
-`.github/workflows/release.yml` runs on every push to `main` and on every
-pushed tag `vMAJOR.MINOR.PATCH[-pre]`. Nothing runs on a pull request, and
-the workflow deploys nothing.
+The host reads an activation file. `host` and `process` configure the host; everything under `config` reaches this collector. `config.example.yaml` is a complete example with placeholder values and no secrets.
 
-A push to `main` publishes the moving `main`, `latest`, and
-`sha-<full-sha>` tags with the same signature and attestation hardening as a
-version release. Use a moving tag only where floating is intended; releases
-stay pinned to digests.
+| Key | Meaning |
+| --- | --- |
+| `targets` | Required, at least one target. |
+| `targets[].provider` | Must be empty or `tempo`; anything else fails closed. |
+| `targets[].scope_id` | Required. The claim scope selects the target. |
+| `targets[].instance_id` | Required. Recorded as the fact source instance. |
+| `targets[].base_url` | Required. Tempo API origin. |
+| `targets[].path_prefix` | Optional path prefix. |
+| `targets[].token_env` | Optional. **Name** of the environment variable holding the token. Empty means unauthenticated Tempo. |
+| `targets[].tenant_id` | Optional literal tenant ID. |
+| `targets[].tenant_id_env` | Optional. **Name** of the environment variable holding the tenant ID; wins over `tenant_id`. |
+| `targets[].resource_limit` | Bound on records read per target (example: `50`). |
+| `targets[].tag_value_names` | Tags whose values are read (example: `resource.service.name`). |
+| `targets[].max_tag_values_per_tag` | Cap per tag (example: `20`). |
+| `targets[].stale_after` | Accepted and validated for parity, but core-owned; the producer ignores it. |
+| `targets[].enabled` | Disabled targets are not served. |
+| `targets[].declared_ids`, `targets[].observed_only_hint` | Hints for declared-vs-observed comparison, which core owns. |
+| `targets[].freshness_probe_enabled` | Also call `GET /api/echo` as a freshness probe. |
+| `targets[].lookback` | Tag-search window (example: `1h`). |
+| `limits.maxResultBytes` | Fail terminal with `result_too_large` above this many encoded bytes (example: `3145728`; default `3500000`, ceiling 64 MiB). Note the camelCase `limits` keys in this repo. |
+| `limits.maxRecordsPerClaim`, `limits.maxPayloadBytes`, `limits.claimTimeoutSeconds` | Accepted so the host envelope parses; the host enforces them. |
 
-The workflow refuses to publish a version release unless the tag points at
-the protected `main` head, so a `v*` tag cut from any other commit publishes
-nothing. As defense in depth, restrict who can create `v*` tags with a tag
-ruleset limited to maintainers.
+Unknown config fields fail closed as terminal `invalid_config` before any provider contact. An unconfigured claim scope fails retryable with no facts.
 
-1. Set `metadata.version` in `manifest.yaml` to the version you are releasing
-   and merge that change to `main`. Then tag the merge commit and push the tag.
-   The workflow refuses to publish unless the tag equals `v` plus that version
-   (a `-pre-release` suffix on the tag is allowed when the manifest version has
-   none), and it checks this before it builds or pushes anything.
-2. The workflow builds `linux/amd64` (the only platform the manifest declares),
-   pushes `ghcr.io/eshu-hq/eshu-collector-tempo:<tag>` (or `:main`,
-   `:latest`, and `:sha-<full-sha>` for a `main` push), writes the
-   digest to the job summary, signs the digest with cosign (keyless), and
-   attaches a SLSA build-provenance attestation and an SPDX SBOM attestation.
-   It needs no secret beyond the job's `GITHUB_TOKEN`.
-3. Copy the `ghcr.io/eshu-hq/eshu-collector-tempo@sha256:<digest>`
-   reference from the job summary into the activation's `seed.image`. The
-   deployment stamps it into the manifest with `collector seed --image-ref`.
+### Credentials
 
-## Build and test
+Secrets travel by environment-variable name only: `token_env` and `tenant_id_env` name variables the collector process reads at claim time. The token is optional — an empty `token_env` means unauthenticated Tempo — but a named-but-unset variable fails closed at config parse. Token and tenant travel in the `Authorization: Bearer` and `X-Scope-OrgID` headers, never in query parameters, facts, logs, or statuses.
+
+Give the credential only the read access the tag endpoints above need. This repo does not name Tempo auth scopes or roles, because the code does not define them.
+
+## Claim budget and operator signals
+
+One claim has a hard deadline: the host kills the process at the initial lease expiry. The collector stops starting provider calls `min(2s, 5% of remaining time)` before that deadline. A claim that arrives with no time left fails retryable as `claim_deadline_exceeded` with no provider contact.
+
+Failure mapping an operator will see:
+
+| Provider outcome | Collector result |
+| --- | --- |
+| `401` / `403` | `permission_hidden` warning; result degrades to partial |
+| `404` / `405` | `unsupported` warning |
+| `429` | `rate_limited`; retryable provider failure |
+| Other provider or transport failure | Terminal or retryable per the bounded failure class in the result |
+| Bad activation config | Terminal `invalid_config`, before provider contact |
+| Encoded result over `limits.maxResultBytes` | Terminal `result_too_large` |
+
+The collector writes one JSON diagnostic line per claim to stderr for local runs and tests; the host process runner drops the text. The line carries claim identity and failure vocabulary only — never a token, URL, or provider body.
+
+The manifest declares no telemetry section and this binary emits no metrics. Counts record against an internal seam and the claim result's failure class is the operator signal; the host adapts per-claim counters to its own signals.
+
+## Eshu dependencies
+
+Exact pins from `go.mod` in this repo. No `replace` directives.
+
+| Module | Pin |
+| --- | --- |
+| `github.com/eshu-hq/eshu-sdk/collector` | `v0.2.0-rc.2` |
+| `github.com/eshu-hq/eshu-sdk/factschema` | `v0.1.0-rc.12` |
+| `gopkg.in/yaml.v3` | `v3.0.1` |
+
+Go version in `go.mod`: `1.26.10`.
+
+One known gap: the pinned `factschema` line referenced in older notes had no per-kind schema-version helper, so the locked `1.0.0` map lives in `tempo/schema.go`. Check that file before assuming the SDK now provides one.
+
+## What it never does
+
+- It never writes to Tempo and never persists spans or traces.
+- It has no Postgres, graph, queue, or lease handle, and never imports Eshu core internals (`boundary_test.go` enforces this).
+- It never builds the durable fact envelope or commits facts; the host does.
+- It carries no grant material and never authorizes itself.
+- It never emits kinds outside the 3 in `manifest.yaml`.
+
+## Build, test, and release
 
 ```bash
-go build ./...
-go vet ./...
-go test -race -count=1 ./...
+make ci          # lint + test + race
+make lint        # vet, golangci-lint, format diff, tidy diff, 500-line cap
+make test        # go build ./... and go test ./... -count=1
+make race        # race tests plus coverage floor (90%)
+make actionlint  # workflow lint
+docker build -t eshu-collector-tempo:local .
 ```
 
-`go test -count=1 -run TestImportBoundaryRejectsCoreAndCrossCollectorImports .`
-is the standalone gate: no Eshu internal imports and no cross-collector
-imports beyond the published SDK modules.
+CI (`.github/workflows/ci.yml`) is the authority; `make ci` mirrors it locally.
 
-`make ci` runs the lint, test, and race lanes CI runs
-(`.github/workflows/ci.yml`; the `ci-complete` job aggregates the others).
+Releases run from `.github/workflows/release.yml` on pushes to `main` and on version tags. Nothing publishes from a pull request and the workflow deploys nothing. A `main` push publishes moving `main`, `latest`, and `sha-<full-sha>` tags; a version tag must equal `v` plus `metadata.version` in `manifest.yaml` (a pre-release suffix is allowed) and point at the protected `main` head. The workflow builds `linux/amd64`, pushes `ghcr.io/eshu-hq/eshu-collector-tempo:<tag>`, signs the digest with cosign (keyless), and attaches SLSA provenance and an SPDX SBOM attestation (signed build records). It needs no secret beyond the job's `GITHUB_TOKEN`. Copy the digest reference from the job summary into the activation.
+
+## Docs and related repos
+
+- [eshu](https://github.com/eshu-hq/eshu) — Eshu core and the extension host that runs this collector.
+- [eshu-sdk](https://github.com/eshu-hq/eshu-sdk) — the collector and fact-schema modules pinned above.
+- [eshu-deploy](https://github.com/eshu-hq/eshu-deploy) — deployment for Eshu components.
+
+Local files: [config.example.yaml](config.example.yaml), [manifest.yaml](manifest.yaml), [Dockerfile](Dockerfile), and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). This repo has no `SECURITY.md` and no `LICENSE` file; source files carry an SPDX MIT header.
