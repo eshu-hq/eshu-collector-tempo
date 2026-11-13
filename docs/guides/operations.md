@@ -78,4 +78,4 @@ Copied from `go.mod`, which wins any disagreement. No `replace` directives.
 | `github.com/eshu-hq/eshu-sdk/factschema` | `v0.1.0-rc.12` |
 | `gopkg.in/yaml.v3` | `v3.0.1` |
 
-Go `1.26.10`, per `go.mod`. One leftover gap: older notes flagged that the pinned `factschema` line had no per-kind schema-version helper, so the locked `1.0.0` map lives in `tempo/schema.go`. Check that file before you assume the SDK provides one now.
+Go `1.26.11`, per `go.mod`. One leftover gap: older notes flagged that the pinned `factschema` line had no per-kind schema-version helper, so the locked `1.0.0` map lives in `tempo/schema.go`. Check that file before you assume the SDK provides one now.
